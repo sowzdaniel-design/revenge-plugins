@@ -1,4 +1,4 @@
-import { findByStoreName, findByProps, findByName } from "@vendetta/metro";
+import { findByStoreName, findByProps, findByName, find } from "@vendetta/metro";
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import { registerCommand } from "@vendetta/commands";
@@ -357,9 +357,31 @@ const ReadAllWrapper = ({ ret }: { ret: any }) => {
 // output "after" it runs, and return a wrapped version of it.
 //
 // The exact internal component name can drift between Discord versions, so
-// this tries a few known candidates and reports the outcome via toast —
-// no PC/logcat needed to see what happened.
+// this first tries a few known name candidates, then falls back to scanning
+// every loaded module's actual source code for the telltale destructured
+// prop names ("guildFolders", "unreadGuilds") that component is known to
+// use. Property/key names like these normally survive minification even
+// when function names don't, so this is a more version-resilient way to
+// locate it. Diagnostic details are logged via console.log, which should
+// show up in `adb logcat` for troubleshooting.
 const GUILD_LIST_CANDIDATES = ["GuildsConnected", "Guilds", "GuildsList", "GuildList"];
+
+const findGuildsComponentBySource = () => {
+  try {
+    return find((m: any) => {
+      try {
+        const fn = m?.default;
+        if (typeof fn !== "function") return false;
+        const src = fn.toString();
+        return src.includes("guildFolders") && src.includes("unreadGuilds");
+      } catch (e) {
+        return false;
+      }
+    });
+  } catch (e) {
+    return null;
+  }
+};
 
 const patchGuildListButton = () => {
   try {
@@ -375,13 +397,36 @@ const patchGuildListButton = () => {
         guildListPatchUnpatch = after("default", mod, (_args: any, ret: any) => {
           return React.createElement(ReadAllWrapper, { ret });
         });
+        console.log(`ReadAll: patched via named candidate "${name}"`);
         showToast(`ReadAll: label attached via "${name}"`, getAssetIDByName("ic_check"));
         return;
       }
     }
 
-    showToast("ReadAll: no matching guild list component found", getAssetIDByName("ic_close_16px"));
+    console.log("ReadAll: no named candidate matched, trying source-scan fallback...");
+    const bySource = findGuildsComponentBySource();
+
+    if (bySource?.default) {
+      const fnName = bySource.default.name || "anonymous";
+      guildListPatchUnpatch = after("default", bySource, (_args: any, ret: any) => {
+        return React.createElement(ReadAllWrapper, { ret });
+      });
+      console.log(`ReadAll: patched via source-scan, function name = "${fnName}"`);
+      showToast(`ReadAll: label attached via source-scan (${fnName})`, getAssetIDByName("ic_check"));
+      return;
+    }
+
+    console.log("ReadAll: source-scan also found nothing. Dumping findByProps('guildFolders') for reference...");
+    try {
+      const propsHit = findByProps("guildFolders");
+      console.log(`ReadAll: findByProps('guildFolders') result keys = ${propsHit ? Object.keys(propsHit).join(", ") : "null"}`);
+    } catch (e) {
+      console.log(`ReadAll: findByProps('guildFolders') threw: ${String(e)}`);
+    }
+
+    showToast("ReadAll: no matching guild list component found (see logcat)", getAssetIDByName("ic_close_16px"));
   } catch (e: any) {
+    console.log(`ReadAll patch error: ${String(e?.stack || e)}`);
     showToast(`ReadAll patch error: ${String(e?.message || e)}`, getAssetIDByName("ic_close_16px"));
   }
 };
