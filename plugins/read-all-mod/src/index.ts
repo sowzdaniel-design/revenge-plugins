@@ -355,15 +355,35 @@ const ReadAllWrapper = ({ ret }: { ret: any }) => {
 // Same technique used by the published "hide-servers" Revenge plugin to
 // modify the guild list: patch the connected guild-list component's render
 // output "after" it runs, and return a wrapped version of it.
+//
+// The exact internal component name can drift between Discord versions, so
+// this tries a few known candidates and reports the outcome via toast —
+// no PC/logcat needed to see what happened.
+const GUILD_LIST_CANDIDATES = ["GuildsConnected", "Guilds", "GuildsList", "GuildList"];
+
 const patchGuildListButton = () => {
   try {
-    const GuildsConnected = findByName("GuildsConnected", false);
-    if (!GuildsConnected?.default) return;
+    for (const name of GUILD_LIST_CANDIDATES) {
+      let mod: any = null;
+      try {
+        mod = findByName(name, false);
+      } catch (e) {
+        continue;
+      }
 
-    guildListPatchUnpatch = after("default", GuildsConnected, (_args, ret) => {
-      return React.createElement(ReadAllWrapper, { ret });
-    });
-  } catch (e) {}
+      if (mod?.default) {
+        guildListPatchUnpatch = after("default", mod, (_args: any, ret: any) => {
+          return React.createElement(ReadAllWrapper, { ret });
+        });
+        showToast(`ReadAll: label attached via "${name}"`, getAssetIDByName("ic_check"));
+        return;
+      }
+    }
+
+    showToast("ReadAll: no matching guild list component found", getAssetIDByName("ic_close_16px"));
+  } catch (e: any) {
+    showToast(`ReadAll patch error: ${String(e?.message || e)}`, getAssetIDByName("ic_close_16px"));
+  }
 };
 
 const SettingsComponent = () => {
