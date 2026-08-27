@@ -1,9 +1,9 @@
-import { findByStoreName, findByProps } from "@vendetta/metro";
+import { findByStoreName, findByProps, findByName } from "@vendetta/metro";
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import { registerCommand } from "@vendetta/commands";
-import { before } from "@vendetta/patcher";
-import { i18n, ReactNative as RN } from "@vendetta/metro/common";
+import { after } from "@vendetta/patcher";
+import { ReactNative as RN } from "@vendetta/metro/common";
 import {
   isServerExcluded,
   isDMExcluded,
@@ -311,25 +311,57 @@ const readDMNotifications = () => {
   bulkAckNotifications('dm');
 };
 
-// Hooks the top-of-guild-list Home/DM icon (same spot as desktop's mark-all-read
-// button) so a long-press on it clears everything. Based on the same
-// TouchableWithoutFeedback patch pattern used by the published "hide-servers"
-// Revenge plugin, which is known to work against the live guild rail.
+// A small clickable text label, styled to resemble the desktop "Read All"
+// link (plain text that highlights/underlines on press rather than a
+// boxed button).
+const ReadAllLabel = () => {
+  const [pressed, setPressed] = React.useState(false);
+
+  return React.createElement(
+    RN.Pressable,
+    {
+      onPress: () => readMainNotifications(),
+      onPressIn: () => setPressed(true),
+      onPressOut: () => setPressed(false),
+      hitSlop: 8,
+      style: { paddingVertical: 8, paddingHorizontal: 12, alignSelf: "flex-start" }
+    },
+    React.createElement(
+      RN.Text,
+      {
+        style: {
+          color: pressed ? "#FFFFFF" : "#B5BAC1",
+          fontSize: 13,
+          fontWeight: "600",
+          textDecorationLine: pressed ? "underline" : "none"
+        }
+      },
+      "Read All"
+    )
+  );
+};
+
+// Wraps the guild list's rendered output, prepending our label as a sibling
+// above it, rather than trying to inject a fake entry into the list itself.
+const ReadAllWrapper = ({ ret }: { ret: any }) => {
+  return React.createElement(
+    RN.View,
+    null,
+    React.createElement(ReadAllLabel),
+    ret
+  );
+};
+
+// Same technique used by the published "hide-servers" Revenge plugin to
+// modify the guild list: patch the connected guild-list component's render
+// output "after" it runs, and return a wrapped version of it.
 const patchGuildListButton = () => {
   try {
-    guildListPatchUnpatch = before("TouchableWithoutFeedback", RN, (args) => {
-      const clone = [...args];
-      if (clone[0]?.accessibilityLabel === i18n.Messages.DIRECT_MESSAGES) {
-        const original = clone[0].onLongPress;
-        clone[0] = {
-          ...clone[0],
-          onLongPress: () => {
-            readMainNotifications();
-            if (typeof original === "function") original();
-          }
-        };
-      }
-      return clone;
+    const GuildsConnected = findByName("GuildsConnected", false);
+    if (!GuildsConnected?.default) return;
+
+    guildListPatchUnpatch = after("default", GuildsConnected, (_args, ret) => {
+      return React.createElement(ReadAllWrapper, { ret });
     });
   } catch (e) {}
 };
@@ -450,7 +482,7 @@ const SettingsComponent = () => {
         onPress: handleClearAll
       }),
       React.createElement(Forms.FormText, { style: { marginTop: 10 } },
-        "Tip: long-press the Home/DM icon at the top of your server list to instantly clear all unread notifications."
+        "Tip: tap the \"Read All\" label above your server list to instantly clear all unread notifications."
       )
     )
   );
