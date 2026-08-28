@@ -364,7 +364,7 @@ const ReadAllWrapper = ({ ret }: { ret: any }) => {
 // when function names don't, so this is a more version-resilient way to
 // locate it. Diagnostic details are logged via console.log, which should
 // show up in `adb logcat` for troubleshooting.
-const GUILD_LIST_CANDIDATES = ["GuildsConnected", "Guilds", "GuildsList", "GuildList"];
+const GUILD_LIST_CANDIDATES = ["LaunchPad", "GuildsConnected", "Guilds", "GuildsList", "GuildList"];
 
 const findGuildsComponentBySource = () => {
   try {
