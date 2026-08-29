@@ -76,6 +76,8 @@ const patchAddReaction = (): boolean => {
 // listener — dispatch() is a single, stable, virtually always-current
 // method call, not something callers typically hold a stale direct
 // reference to.
+const seenActionTypes = new Set<string>();
+
 const patchDispatch = (): boolean => {
   try {
     const mod = findByProps("dispatch", "subscribe");
@@ -83,7 +85,18 @@ const patchDispatch = (): boolean => {
 
     dispatchUnpatch = before("dispatch", mod, (args: any[]) => {
       try {
-        if (args[0]?.type === "BURST_REACTION_EFFECT_PLAY") {
+        const actionType = args[0]?.type;
+
+        // TEMPORARY: confirms whether BURST_REACTION_EFFECT_PLAY is
+        // actually dispatched for your own outgoing reaction at all, or
+        // whether it's a different action name / mechanism entirely.
+        // Only fires once per distinct action type so it doesn't spam.
+        if (typeof actionType === "string" && actionType.includes("BURST") && !seenActionTypes.has(actionType)) {
+          seenActionTypes.add(actionType);
+          showToast(`SuperReactionTweaks: dispatch saw "${actionType}"`, getAssetIDByName("ic_check"));
+        }
+
+        if (actionType === "BURST_REACTION_EFFECT_PLAY") {
           args[0] = { ...args[0], type: "__SUPER_REACTION_TWEAKS_SUPPRESSED__" };
         }
       } catch (e) {}
