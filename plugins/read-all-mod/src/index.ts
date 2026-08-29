@@ -267,7 +267,7 @@ const readMainNotifications = () => {
 // A small clickable text label, styled to resemble the desktop "Read All"
 // link (plain text that highlights/underlines on press rather than a
 // boxed button).
-const ReadAllLabel = () => {
+const ReadAllLabel = ({ compact = false }: { compact?: boolean } = {}) => {
   const [pressed, setPressed] = React.useState(false);
 
   return React.createElement(
@@ -277,14 +277,16 @@ const ReadAllLabel = () => {
       onPressIn: () => setPressed(true),
       onPressOut: () => setPressed(false),
       hitSlop: 8,
-      style: { paddingVertical: 8, paddingHorizontal: 12, alignSelf: "flex-start" }
+      style: compact
+        ? { paddingVertical: 1, paddingHorizontal: 8, alignSelf: "center" }
+        : { paddingVertical: 8, paddingHorizontal: 12, alignSelf: "flex-start" }
     },
     React.createElement(
       RN.Text,
       {
         style: {
           color: pressed ? "#FFFFFF" : "#B5BAC1",
-          fontSize: 13,
+          fontSize: compact ? 9 : 13,
           fontWeight: "600",
           textDecorationLine: pressed ? "underline" : "none"
         }
@@ -328,7 +330,7 @@ const ReadAllAfterWrapper = ({ ret }: { ret: any }) => {
     React.createElement(
       RN.View,
       { style: { position: "absolute", top: "100%", left: 0, right: 0 }, pointerEvents: "box-none" },
-      React.createElement(ReadAllLabel)
+      React.createElement(ReadAllLabel, { compact: true })
     )
   );
 };
