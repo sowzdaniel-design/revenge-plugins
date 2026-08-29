@@ -352,6 +352,20 @@ const ReadAllWrapper = ({ ret }: { ret: any }) => {
   );
 };
 
+// Same idea, but appends the label AFTER the wrapped content instead of
+// before. Used when attaching directly to the "Messages" home-button item
+// (GuildsBarMessages) so the label sits just under it, above the separator
+// that divides it from the scrollable guild list — matching where desktop's
+// equivalent link sits.
+const ReadAllAfterWrapper = ({ ret }: { ret: any }) => {
+  return React.createElement(
+    RN.View,
+    null,
+    ret,
+    React.createElement(ReadAllLabel)
+  );
+};
+
 // Same technique used by the published "hide-servers" Revenge plugin to
 // modify the guild list: patch the connected guild-list component's render
 // output "after" it runs, and return a wrapped version of it.
@@ -365,16 +379,23 @@ const ReadAllWrapper = ({ ret }: { ret: any }) => {
 // locate it. Diagnostic details are logged via console.log, which should
 // show up in `adb logcat` for troubleshooting.
 // Confirmed via static analysis of Discord's actual compiled bundle
-// (decompiled Hermes bytecode): the guild rail is rendered by a component
-// named "LaunchPadUnreadServers" (file: modules/launchpad/native/
-// LaunchPadUnreadServers.tsx), exported as:
-//   exports.default = React.memo(function LaunchPadUnreadServers() {...})
-// Because it's wrapped in React.memo, the module's `.default` is a memo
-// wrapper *object* (not a plain function), so a naive `findByName` check
-// against `.default.name` never matches — the real function lives on
-// `.default.type`. This search checks plain-function, memo-wrapped, and
-// forwardRef-wrapped shapes so it keeps working if the wrapping changes.
-const GUILD_LIST_CANDIDATES = ["LaunchPadUnreadServers", "LaunchPad", "GuildsConnected", "Guilds", "GuildsList", "GuildList"];
+// (decompiled Hermes bytecode). The persistent guild rail lives in
+// modules/guilds_bar/native/ and is assembled from small per-row
+// components; the top "Messages" home icon is its own component,
+// GuildsBarMessages (modules/guilds_bar/native/GuildsBarMessages.tsx).
+// Attaching directly to that (appending our label after its own render
+// output) puts the label right under it, above the separator that divides
+// it from the scrollable guild list below — matching the position
+// requested. GuildsBar itself is the whole rail's top-level wrapper
+// (modules/guilds_bar/native/GuildsBar.tsx) and is used as a fallback if
+// the more precise target isn't found, though it would place the label
+// above the entire rail rather than just under the Messages icon.
+//
+// LaunchPad/LaunchPadUnreadServers (modules/launchpad/native/) turned out
+// to belong to a separate search/quick-switcher overlay, not the always-
+// visible rail, and are kept only as a last-resort fallback.
+const PRECISE_TARGET = "GuildsBarMessages";
+const GUILD_LIST_CANDIDATES = ["GuildsBar", "LaunchPadUnreadServers", "LaunchPad", "GuildsConnected", "Guilds", "GuildsList", "GuildList"];
 
 type FoundTarget = { mod: any; patchKey: "default" | "type" | "render"; patchObj: any };
 
@@ -427,6 +448,20 @@ const findGuildsComponentBySource = () => {
 
 const patchGuildListButton = () => {
   try {
+    // Try the precise target first: attach directly to the Messages icon
+    // so the label sits right under it.
+    const preciseFound = findComponentByName(PRECISE_TARGET);
+    if (preciseFound) {
+      guildListPatchUnpatch = after(preciseFound.patchKey, preciseFound.patchObj, (_args: any, ret: any) => {
+        return React.createElement(ReadAllAfterWrapper, { ret });
+      });
+      console.log(`ReadAll: patched via precise target "${PRECISE_TARGET}" (key: ${preciseFound.patchKey})`);
+      showToast(`ReadAll: label attached under Messages icon`, getAssetIDByName("ic_check"));
+      return;
+    }
+
+    console.log(`ReadAll: precise target "${PRECISE_TARGET}" not found, trying whole-bar candidates...`);
+
     for (const name of GUILD_LIST_CANDIDATES) {
       const found = findComponentByName(name);
       if (found) {
@@ -434,7 +469,7 @@ const patchGuildListButton = () => {
           return React.createElement(ReadAllWrapper, { ret });
         });
         console.log(`ReadAll: patched via "${name}" (key: ${found.patchKey})`);
-        showToast(`ReadAll: label attached via "${name}"`, getAssetIDByName("ic_check"));
+        showToast(`ReadAll: label attached via "${name}" (approximate position)`, getAssetIDByName("ic_check"));
         return;
       }
     }
