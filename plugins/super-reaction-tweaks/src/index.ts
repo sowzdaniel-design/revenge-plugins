@@ -1,5 +1,7 @@
-import { findByProps } from "@vendetta/metro";
+import { findByProps, find } from "@vendetta/metro";
 import { before, instead } from "@vendetta/patcher";
+import { showToast } from "@vendetta/ui/toasts";
+import { getAssetIDByName } from "@vendetta/ui/assets";
 
 // All findings below come from statically decompiling Discord's actual
 // compiled Android bundle (Hermes bytecode), not from guessing — so the
@@ -21,13 +23,13 @@ let playBurstReactionUnpatch: (() => void) | null = null;
 // (those are handled by separately-named handleReaction/handleReactionBatch
 // functions elsewhere, which this does not touch).
 //
-// Rather than separately reproducing the reaction picker's internal
-// "default to Super" toggle state (which would mean simulating a UI press
-// on an internal component we don't have a stable, low-risk hook into),
-// this patches the single shared choke point both features actually route
-// through: it forces every outgoing reaction to carry burst: true unless a
-// caller explicitly opted out with burst: false. This covers manual picker
-// taps and double-tap identically, with one simple, low-risk patch.
+// This unconditionally forces every outgoing reaction to carry burst: true,
+// regardless of what the caller passed. The full emoji picker's "Super"
+// toggle defaults to off and explicitly passes burst: false until manually
+// toggled — an earlier version of this patch respected that explicit
+// false, which is exactly why the toggle still had to be tapped manually.
+// Forcing it unconditionally makes every reaction path (picker taps,
+// double-tap, quick-reaction bar) behave the same way with no toggling.
 const patchAddReaction = (): boolean => {
   try {
     const mod = findByProps("addReaction");
@@ -36,9 +38,7 @@ const patchAddReaction = (): boolean => {
     addReactionUnpatch = before("addReaction", mod, (args: any[]) => {
       try {
         const existingOptions = args[4] && typeof args[4] === "object" ? args[4] : {};
-        if (existingOptions.burst !== false) {
-          args[4] = { ...existingOptions, burst: true };
-        }
+        args[4] = { ...existingOptions, burst: true };
       } catch (e) {}
       return args;
     });
@@ -61,10 +61,43 @@ const patchAddReaction = (): boolean => {
 const patchPlayBurstReaction = (): boolean => {
   try {
     const mod = findByProps("playBurstReaction");
-    if (!mod?.playBurstReaction) return false;
+    if (mod?.playBurstReaction) {
+      playBurstReactionUnpatch = instead("playBurstReaction", mod, () => undefined);
+      return true;
+    }
 
-    playBurstReactionUnpatch = instead("playBurstReaction", mod, () => undefined);
-    return true;
+    // Fallback: search every loaded module for a function that dispatches
+    // the BURST_REACTION_EFFECT_PLAY action, in case the direct property
+    // name lookup missed (e.g. different export name on this build).
+    const bySource = find((m: any) => {
+      try {
+        for (const key of Object.keys(m || {})) {
+          const val = m[key];
+          if (typeof val === "function" && val.toString().includes("BURST_REACTION_EFFECT_PLAY")) {
+            return true;
+          }
+        }
+        return false;
+      } catch (e) {
+        return false;
+      }
+    });
+
+    if (bySource) {
+      const matchKey = Object.keys(bySource).find((key) => {
+        try {
+          return typeof bySource[key] === "function" && bySource[key].toString().includes("BURST_REACTION_EFFECT_PLAY");
+        } catch (e) {
+          return false;
+        }
+      });
+      if (matchKey) {
+        playBurstReactionUnpatch = instead(matchKey, bySource, () => undefined);
+        return true;
+      }
+    }
+
+    return false;
   } catch (e) {
     return false;
   }
@@ -72,8 +105,15 @@ const patchPlayBurstReaction = (): boolean => {
 
 export default {
   onLoad: () => {
-    patchAddReaction();
-    patchPlayBurstReaction();
+    const addReactionOk = patchAddReaction();
+    const playBurstOk = patchPlayBurstReaction();
+
+    if (!addReactionOk || !playBurstOk) {
+      showToast(
+        `SuperReactionTweaks: addReaction=${addReactionOk ? "ok" : "FAILED"}, animation-block=${playBurstOk ? "ok" : "FAILED"}`,
+        getAssetIDByName("ic_close_16px")
+      );
+    }
   },
 
   onUnload: () => {
