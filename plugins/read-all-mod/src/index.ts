@@ -64,8 +64,9 @@ const initModules = () => {
 const getDMChannels = () => {
   const dmChannels: any[] = [];
   const channelStore = ChannelStore || GuildChannelStore;
+  let strategyUsed = "none";
 
-  if (!channelStore) return dmChannels;
+  if (!channelStore) return { dmChannels, strategyUsed };
 
   if (channelStore.getPrivateChannels) {
     try {
@@ -74,6 +75,7 @@ const getDMChannels = () => {
         Object.values(privateChannels).forEach((channel: any) => {
           if (channel && channel.id) dmChannels.push(channel);
         });
+        if (dmChannels.length > 0) strategyUsed = "getPrivateChannels";
       }
     } catch (e) {}
   }
@@ -85,6 +87,7 @@ const getDMChannels = () => {
         sortedPrivateChannels.forEach((channel: any) => {
           if (channel && channel.id) dmChannels.push(channel);
         });
+        if (dmChannels.length > 0) strategyUsed = "getSortedPrivateChannels";
       }
     } catch (e) {}
   }
@@ -97,6 +100,7 @@ const getDMChannels = () => {
           const channel = c.channel || c;
           if (channel && channel.id) dmChannels.push(channel);
         });
+        if (dmChannels.length > 0) strategyUsed = "getChannels(@me)";
       }
     } catch (e) {}
   }
@@ -113,10 +117,11 @@ const getDMChannels = () => {
           }
         } catch (e) {}
       });
+      if (dmChannels.length > 0) strategyUsed = `getAllReadStates(${Object.keys(allReadStates).length} entries scanned)`;
     } catch (e) {}
   }
 
-  return dmChannels;
+  return { dmChannels, strategyUsed };
 };
 
 const getServerChannels = () => {
@@ -171,7 +176,17 @@ const getServerChannels = () => {
 
 const getDMUnreadChannels = () => {
   const channels: Array<any> = [];
-  const dmChannels = getDMChannels();
+  const { dmChannels, strategyUsed } = getDMChannels();
+
+  // Fetch once outside the loop instead of once per channel — this was
+  // previously called again inside the loop as a fallback check for every
+  // single DM, which multiplies its cost by the number of DMs you have.
+  let allReadStates: any = null;
+  if (ReadStateStore?.getAllReadStates) {
+    try {
+      allReadStates = ReadStateStore.getAllReadStates();
+    } catch (e) {}
+  }
 
   dmChannels.forEach((channel: any) => {
     if (!channel?.id) return;
@@ -186,8 +201,7 @@ const getDMUnreadChannels = () => {
         hasUnread = ReadStateStore.hasUnread(channel.id);
       }
 
-      if (!hasUnread && ReadStateStore.getAllReadStates) {
-        const allReadStates = ReadStateStore.getAllReadStates();
+      if (!hasUnread && allReadStates) {
         const readState = allReadStates[channel.id];
         if (readState) {
           hasUnread = (readState.mentionCount && readState.mentionCount > 0) ||
@@ -206,30 +220,53 @@ const getDMUnreadChannels = () => {
     } catch (e) {}
   });
 
-  return channels;
+  return { channels, dmCount: dmChannels.length, strategyUsed };
 };
 
 const bulkAckNotifications = (type: 'all' | 'server' | 'dm' = 'all') => {
   if (!GuildStore || !ReadStateStore || !FluxDispatcher) return false;
 
+  const startTime = Date.now();
   let channels: Array<any> = [];
   let typeLabel = '';
+  let dmDiag = { dmCount: 0, strategyUsed: "n/a" };
+  let serverMs = 0, dmMs = 0;
 
   switch (type) {
-    case 'server':
+    case 'server': {
+      const t0 = Date.now();
       channels = getServerChannels();
+      serverMs = Date.now() - t0;
       typeLabel = 'server';
       break;
-    case 'dm':
-      channels = getDMUnreadChannels();
+    }
+    case 'dm': {
+      const t0 = Date.now();
+      const dmResult = getDMUnreadChannels();
+      dmMs = Date.now() - t0;
+      channels = dmResult.channels;
+      dmDiag = { dmCount: dmResult.dmCount, strategyUsed: dmResult.strategyUsed };
       typeLabel = 'DM';
       break;
+    }
     case 'all':
-    default:
-      channels = [...getServerChannels(), ...getDMUnreadChannels()];
+    default: {
+      const t0 = Date.now();
+      const serverChannels = getServerChannels();
+      serverMs = Date.now() - t0;
+
+      const t1 = Date.now();
+      const dmResult = getDMUnreadChannels();
+      dmMs = Date.now() - t1;
+      dmDiag = { dmCount: dmResult.dmCount, strategyUsed: dmResult.strategyUsed };
+
+      channels = [...serverChannels, ...dmResult.channels];
       typeLabel = '';
       break;
+    }
   }
+
+  console.log(`ReadAll timing: server=${serverMs}ms dm=${dmMs}ms dmCount=${dmDiag.dmCount} strategy=${dmDiag.strategyUsed}`);
 
   if (channels.length === 0) {
     const message = type === 'all'
@@ -245,16 +282,17 @@ const bulkAckNotifications = (type: 'all' | 'server' | 'dm' = 'all') => {
     channels: channels
   });
 
+  const totalMs = Date.now() - startTime;
   const message = type === 'all'
-    ? `Cleared ${channels.length} unread notifications!`
-    : `Cleared ${channels.length} unread ${typeLabel} notifications!`;
+    ? `Cleared ${channels.length} unread (${totalMs}ms, dm:${dmMs}ms/${dmDiag.strategyUsed})`
+    : `Cleared ${channels.length} unread ${typeLabel} (${totalMs}ms)`;
 
   showToast(message, getAssetIDByName("ic_message_edit"));
   return true;
 };
 
 const readMainNotifications = () => {
-  bulkAckNotifications('all');
+  bulkAckNotifications('server');
 };
 
 const readAllNotifications = () => {
