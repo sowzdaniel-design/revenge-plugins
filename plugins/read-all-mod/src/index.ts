@@ -325,13 +325,9 @@ const ReadAllWrapper = ({ ret }: { ret: any }) => {
 const ReadAllAfterWrapper = ({ ret }: { ret: any }) => {
   return React.createElement(
     RN.View,
-    { style: { position: "relative" } },
+    null,
     ret,
-    React.createElement(
-      RN.View,
-      { style: { position: "absolute", top: "100%", left: 0, right: 0 }, pointerEvents: "box-none" },
-      React.createElement(ReadAllLabel, { compact: true })
-    )
+    React.createElement(ReadAllLabel)
   );
 };
 
