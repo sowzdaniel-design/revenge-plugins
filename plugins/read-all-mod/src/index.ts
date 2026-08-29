@@ -1,7 +1,6 @@
 import { findByStoreName, findByProps, findByName, find } from "@vendetta/metro";
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
-import { registerCommand } from "@vendetta/commands";
 import { after } from "@vendetta/patcher";
 import { ReactNative as RN } from "@vendetta/metro/common";
 import {
@@ -26,10 +25,6 @@ let ReadStateStore: any;
 let FluxDispatcher: any;
 let ChannelStore: any;
 
-let readCommandUnregister: (() => void) | null = null;
-let readAllCommandUnregister: (() => void) | null = null;
-let readServerCommandUnregister: (() => void) | null = null;
-let readDMCommandUnregister: (() => void) | null = null;
 let guildListPatchUnpatch: (() => void) | null = null;
 
 const findModule = (patterns: string[], storeName?: string) => {
@@ -269,10 +264,6 @@ const bulkAckNotifications = (type: 'all' | 'server' | 'dm' = 'all') => {
   console.log(`ReadAll timing: server=${serverMs}ms dm=${dmMs}ms dmCount=${dmDiag.dmCount} strategy=${dmDiag.strategyUsed}`);
 
   if (channels.length === 0) {
-    const message = type === 'all'
-      ? "No unread notifications found!"
-      : `No unread ${typeLabel} notifications found!`;
-    showToast(message, getAssetIDByName("ic_message_edit"));
     return true;
   }
 
@@ -282,29 +273,11 @@ const bulkAckNotifications = (type: 'all' | 'server' | 'dm' = 'all') => {
     channels: channels
   });
 
-  const totalMs = Date.now() - startTime;
-  const message = type === 'all'
-    ? `Cleared ${channels.length} unread (${totalMs}ms, dm:${dmMs}ms/${dmDiag.strategyUsed})`
-    : `Cleared ${channels.length} unread ${typeLabel} (${totalMs}ms)`;
-
-  showToast(message, getAssetIDByName("ic_message_edit"));
   return true;
 };
 
 const readMainNotifications = () => {
   bulkAckNotifications('server');
-};
-
-const readAllNotifications = () => {
-  bulkAckNotifications('server');
-};
-
-const readServerNotifications = () => {
-  bulkAckNotifications('server');
-};
-
-const readDMNotifications = () => {
-  bulkAckNotifications('dm');
 };
 
 // A small clickable text label, styled to resemble the desktop "Read All"
@@ -639,77 +612,10 @@ const SettingsComponent = () => {
 export default {
   onLoad: () => {
     initModules();
-
-    try {
-      readCommandUnregister = registerCommand({
-        name: "read",
-        description: "Clear all unread notifications",
-        applicationId: "-1",
-        execute: () => {
-          readMainNotifications();
-          return;
-        }
-      });
-
-      readAllCommandUnregister = registerCommand({
-        name: "read all",
-        description: "Clear server unread notifications only",
-        applicationId: "-1",
-        execute: () => {
-          readAllNotifications();
-          return;
-        }
-      });
-
-      readServerCommandUnregister = registerCommand({
-        name: "read server",
-        description: "Clear server unread notifications only",
-        applicationId: "-1",
-        execute: () => {
-          readServerNotifications();
-          return;
-        }
-      });
-
-      readDMCommandUnregister = registerCommand({
-        name: "read dm",
-        description: "Clear DM unread notifications only",
-        applicationId: "-1",
-        execute: () => {
-          readDMNotifications();
-          return;
-        }
-      });
-    } catch (e) {}
-
     patchGuildListButton();
   },
 
   onUnload: () => {
-    if (readCommandUnregister) {
-      try {
-        readCommandUnregister();
-        readCommandUnregister = null;
-      } catch (e) {}
-    }
-    if (readAllCommandUnregister) {
-      try {
-        readAllCommandUnregister();
-        readAllCommandUnregister = null;
-      } catch (e) {}
-    }
-    if (readServerCommandUnregister) {
-      try {
-        readServerCommandUnregister();
-        readServerCommandUnregister = null;
-      } catch (e) {}
-    }
-    if (readDMCommandUnregister) {
-      try {
-        readDMCommandUnregister();
-        readDMCommandUnregister = null;
-      } catch (e) {}
-    }
     if (guildListPatchUnpatch) {
       try {
         guildListPatchUnpatch();
