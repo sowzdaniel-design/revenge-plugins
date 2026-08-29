@@ -1,0 +1,9 @@
+{
+    "name": "Super Reaction Tweaks",
+    "description": "Reactions you send default to Super Reactions (no toggle needed), double-tap-to-react sends a Super Reaction, and the full-screen Super Reaction animation is skipped.",
+    "authors": [
+        { "name": "Daniel", "id": "0" }
+    ],
+    "main": "src/index.ts",
+    "vendetta": { "icon": "ic_reactions" }
+}
