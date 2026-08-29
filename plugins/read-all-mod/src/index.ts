@@ -31,8 +31,6 @@ let readAllCommandUnregister: (() => void) | null = null;
 let readServerCommandUnregister: (() => void) | null = null;
 let readDMCommandUnregister: (() => void) | null = null;
 let guildListPatchUnpatch: (() => void) | null = null;
-let lastUsed = 0;
-const COOLDOWN_MS = 60000;
 
 const findModule = (patterns: string[], storeName?: string) => {
   if (storeName) {
@@ -256,58 +254,18 @@ const bulkAckNotifications = (type: 'all' | 'server' | 'dm' = 'all') => {
 };
 
 const readMainNotifications = () => {
-  const now = Date.now();
-  const timeSinceLastUse = now - lastUsed;
-
-  if (timeSinceLastUse < COOLDOWN_MS) {
-    const remainingSeconds = Math.ceil((COOLDOWN_MS - timeSinceLastUse) / 1000);
-    showToast(`Please wait ${remainingSeconds}s before using again`, getAssetIDByName("ic_close_16px"));
-    return;
-  }
-
-  lastUsed = now;
   bulkAckNotifications('all');
 };
 
 const readAllNotifications = () => {
-  const now = Date.now();
-  const timeSinceLastUse = now - lastUsed;
-
-  if (timeSinceLastUse < COOLDOWN_MS) {
-    const remainingSeconds = Math.ceil((COOLDOWN_MS - timeSinceLastUse) / 1000);
-    showToast(`Please wait ${remainingSeconds}s before using again`, getAssetIDByName("ic_close_16px"));
-    return;
-  }
-
-  lastUsed = now;
   bulkAckNotifications('server');
 };
 
 const readServerNotifications = () => {
-  const now = Date.now();
-  const timeSinceLastUse = now - lastUsed;
-
-  if (timeSinceLastUse < COOLDOWN_MS) {
-    const remainingSeconds = Math.ceil((COOLDOWN_MS - timeSinceLastUse) / 1000);
-    showToast(`Please wait ${remainingSeconds}s before using again`, getAssetIDByName("ic_close_16px"));
-    return;
-  }
-
-  lastUsed = now;
   bulkAckNotifications('server');
 };
 
 const readDMNotifications = () => {
-  const now = Date.now();
-  const timeSinceLastUse = now - lastUsed;
-
-  if (timeSinceLastUse < COOLDOWN_MS) {
-    const remainingSeconds = Math.ceil((COOLDOWN_MS - timeSinceLastUse) / 1000);
-    showToast(`Please wait ${remainingSeconds}s before using again`, getAssetIDByName("ic_close_16px"));
-    return;
-  }
-
-  lastUsed = now;
   bulkAckNotifications('dm');
 };
 
