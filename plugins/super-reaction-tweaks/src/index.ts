@@ -101,20 +101,20 @@ const SettingsComponent = () => {
     Forms.FormSection,
     { title: "Super Reaction Tweaks" },
     React.createElement(Forms.FormSwitchRow, {
-      label: "Default reactions to Super",
-      subLabel: "Manual picker taps and the quick-reaction bar send Super Reactions without needing to toggle it on.",
+      label: "Super reactions by default",
+      subLabel: "",
       value: settings.defaultToSuper,
       onValueChange: (value: boolean) => updateSetting("defaultToSuper", value)
     }),
     React.createElement(Forms.FormSwitchRow, {
-      label: "Double-tap sends Super Reaction",
-      subLabel: "Double-tapping a message sends a Super Reaction instead of a normal one.",
+      label: "Double-tap to super react",
+      subLabel: "",
       value: settings.doubleTapToSuper,
       onValueChange: (value: boolean) => updateSetting("doubleTapToSuper", value)
     }),
     React.createElement(Forms.FormSwitchRow, {
       label: "Remove Super Reaction animation",
-      subLabel: "Skips the full-screen animation that plays after sending a Super Reaction.",
+      subLabel: "",
       value: settings.removeAnimation,
       onValueChange: (value: boolean) => updateSetting("removeAnimation", value)
     })
