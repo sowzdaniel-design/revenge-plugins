@@ -8,7 +8,7 @@ import { getAssetIDByName } from "@vendetta/ui/assets";
 // function/prop names here are the real, confirmed runtime names.
 
 let addReactionUnpatch: (() => void) | null = null;
-let playBurstReactionUnpatch: (() => void) | null = null;
+let dispatchUnpatch: (() => void) | null = null;
 
 // Feature 1 (default to Super) + Feature 2 (double-tap = Super):
 //
@@ -30,6 +30,13 @@ let playBurstReactionUnpatch: (() => void) | null = null;
 // false, which is exactly why the toggle still had to be tapped manually.
 // Forcing it unconditionally makes every reaction path (picker taps,
 // double-tap, quick-reaction bar) behave the same way with no toggling.
+//
+// TEMPORARY: logs a one-time-per-location diagnostic toast so we can see
+// whether the full emoji picker's tap is actually reaching this patched
+// function at all, or routes through a different module entirely. Remove
+// once confirmed.
+const seenLocations = new Set<string>();
+
 const patchAddReaction = (): boolean => {
   try {
     const mod = findByProps("addReaction");
@@ -37,6 +44,12 @@ const patchAddReaction = (): boolean => {
 
     addReactionUnpatch = before("addReaction", mod, (args: any[]) => {
       try {
+        const locationKey = String(args[3]);
+        if (!seenLocations.has(locationKey)) {
+          seenLocations.add(locationKey);
+          showToast(`SuperReactionTweaks: addReaction fired, location=${locationKey}`, getAssetIDByName("ic_check"));
+        }
+
         const existingOptions = args[4] && typeof args[4] === "object" ? args[4] : {};
         args[4] = { ...existingOptions, burst: true };
       } catch (e) {}
@@ -51,53 +64,33 @@ const patchAddReaction = (): boolean => {
 
 // Feature 3 (remove the full-screen animation):
 //
-// playBurstReaction's entire job is dispatching the Flux action that
-// triggers the full-screen Super Reaction animation:
-//   dispatch({ type: "BURST_REACTION_EFFECT_PLAY", channelId, messageId, emoji, key })
-// (this is the exact same action Vencord's desktop version patches to
-// implement its own playing-limit feature). Replacing the whole function
-// with a no-op skips the dispatch entirely, so the animation never fires,
-// while everything else about sending/receiving the reaction is untouched.
-const patchPlayBurstReaction = (): boolean => {
+// The animation is triggered by dispatching a Flux action of type
+// "BURST_REACTION_EFFECT_PLAY" (this is the exact same action Vencord's
+// desktop version patches to implement its own playing-limit feature).
+// Rather than patching the standalone playBurstReaction function that
+// creates this dispatch (fragile: if other code already captured a direct
+// reference to that function via destructuring before this patch installs,
+// patching the module property afterward would have no effect on those
+// existing references), this patches Discord's central Flux dispatcher
+// itself and swallows this specific action type before it reaches any
+// listener — dispatch() is a single, stable, virtually always-current
+// method call, not something callers typically hold a stale direct
+// reference to.
+const patchDispatch = (): boolean => {
   try {
-    const mod = findByProps("playBurstReaction");
-    if (mod?.playBurstReaction) {
-      playBurstReactionUnpatch = instead("playBurstReaction", mod, () => undefined);
-      return true;
-    }
+    const mod = findByProps("dispatch", "subscribe");
+    if (!mod?.dispatch) return false;
 
-    // Fallback: search every loaded module for a function that dispatches
-    // the BURST_REACTION_EFFECT_PLAY action, in case the direct property
-    // name lookup missed (e.g. different export name on this build).
-    const bySource = find((m: any) => {
+    dispatchUnpatch = before("dispatch", mod, (args: any[]) => {
       try {
-        for (const key of Object.keys(m || {})) {
-          const val = m[key];
-          if (typeof val === "function" && val.toString().includes("BURST_REACTION_EFFECT_PLAY")) {
-            return true;
-          }
+        if (args[0]?.type === "BURST_REACTION_EFFECT_PLAY") {
+          args[0] = { ...args[0], type: "__SUPER_REACTION_TWEAKS_SUPPRESSED__" };
         }
-        return false;
-      } catch (e) {
-        return false;
-      }
+      } catch (e) {}
+      return args;
     });
 
-    if (bySource) {
-      const matchKey = Object.keys(bySource).find((key) => {
-        try {
-          return typeof bySource[key] === "function" && bySource[key].toString().includes("BURST_REACTION_EFFECT_PLAY");
-        } catch (e) {
-          return false;
-        }
-      });
-      if (matchKey) {
-        playBurstReactionUnpatch = instead(matchKey, bySource, () => undefined);
-        return true;
-      }
-    }
-
-    return false;
+    return true;
   } catch (e) {
     return false;
   }
@@ -106,11 +99,11 @@ const patchPlayBurstReaction = (): boolean => {
 export default {
   onLoad: () => {
     const addReactionOk = patchAddReaction();
-    const playBurstOk = patchPlayBurstReaction();
+    const dispatchOk = patchDispatch();
 
-    if (!addReactionOk || !playBurstOk) {
+    if (!addReactionOk || !dispatchOk) {
       showToast(
-        `SuperReactionTweaks: addReaction=${addReactionOk ? "ok" : "FAILED"}, animation-block=${playBurstOk ? "ok" : "FAILED"}`,
+        `SuperReactionTweaks: addReaction=${addReactionOk ? "ok" : "FAILED"}, dispatch-patch=${dispatchOk ? "ok" : "FAILED"}`,
         getAssetIDByName("ic_close_16px")
       );
     }
@@ -123,11 +116,11 @@ export default {
       } catch (e) {}
       addReactionUnpatch = null;
     }
-    if (playBurstReactionUnpatch) {
+    if (dispatchUnpatch) {
       try {
-        playBurstReactionUnpatch();
+        dispatchUnpatch();
       } catch (e) {}
-      playBurstReactionUnpatch = null;
+      dispatchUnpatch = null;
     }
   }
 };
