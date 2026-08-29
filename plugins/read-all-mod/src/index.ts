@@ -224,44 +224,28 @@ const bulkAckNotifications = (type: 'all' | 'server' | 'dm' = 'all') => {
   const startTime = Date.now();
   let channels: Array<any> = [];
   let typeLabel = '';
-  let dmDiag = { dmCount: 0, strategyUsed: "n/a" };
-  let serverMs = 0, dmMs = 0;
 
   switch (type) {
     case 'server': {
-      const t0 = Date.now();
       channels = getServerChannels();
-      serverMs = Date.now() - t0;
       typeLabel = 'server';
       break;
     }
     case 'dm': {
-      const t0 = Date.now();
       const dmResult = getDMUnreadChannels();
-      dmMs = Date.now() - t0;
       channels = dmResult.channels;
-      dmDiag = { dmCount: dmResult.dmCount, strategyUsed: dmResult.strategyUsed };
       typeLabel = 'DM';
       break;
     }
     case 'all':
     default: {
-      const t0 = Date.now();
       const serverChannels = getServerChannels();
-      serverMs = Date.now() - t0;
-
-      const t1 = Date.now();
       const dmResult = getDMUnreadChannels();
-      dmMs = Date.now() - t1;
-      dmDiag = { dmCount: dmResult.dmCount, strategyUsed: dmResult.strategyUsed };
-
       channels = [...serverChannels, ...dmResult.channels];
       typeLabel = '';
       break;
     }
   }
-
-  console.log(`ReadAll timing: server=${serverMs}ms dm=${dmMs}ms dmCount=${dmDiag.dmCount} strategy=${dmDiag.strategyUsed}`);
 
   if (channels.length === 0) {
     return true;
@@ -326,12 +310,26 @@ const ReadAllWrapper = ({ ret }: { ret: any }) => {
 // (GuildsBarMessages) so the label sits just under it, above the separator
 // that divides it from the scrollable guild list — matching where desktop's
 // equivalent link sits.
+//
+// The extra wrapping View is absolutely positioned and non-touch-
+// intercepting (pointerEvents: "box-none") rather than a normal sibling.
+// GuildsBarMessages is a row inside a virtualized/draggable list, and a
+// plain extra sibling would grow that row's measured height and could
+// intercept touches meant for the list's own drag-to-reorder gesture
+// handling — which is exactly what broke reordering servers. Positioning
+// it absolutely removes it from normal layout flow entirely, so the
+// underlying row's measured size (and the list's drag math) stays
+// unchanged, while the label still visually appears in the same spot.
 const ReadAllAfterWrapper = ({ ret }: { ret: any }) => {
   return React.createElement(
     RN.View,
-    null,
+    { style: { position: "relative" } },
     ret,
-    React.createElement(ReadAllLabel)
+    React.createElement(
+      RN.View,
+      { style: { position: "absolute", top: "100%", left: 0, right: 0 }, pointerEvents: "box-none" },
+      React.createElement(ReadAllLabel)
+    )
   );
 };
 
@@ -424,12 +422,8 @@ const patchGuildListButton = () => {
       guildListPatchUnpatch = after(preciseFound.patchKey, preciseFound.patchObj, (_args: any, ret: any) => {
         return React.createElement(ReadAllAfterWrapper, { ret });
       });
-      console.log(`ReadAll: patched via precise target "${PRECISE_TARGET}" (key: ${preciseFound.patchKey})`);
-      showToast(`ReadAll: label attached under Messages icon`, getAssetIDByName("ic_check"));
       return;
     }
-
-    console.log(`ReadAll: precise target "${PRECISE_TARGET}" not found, trying whole-bar candidates...`);
 
     for (const name of GUILD_LIST_CANDIDATES) {
       const found = findComponentByName(name);
@@ -437,54 +431,32 @@ const patchGuildListButton = () => {
         guildListPatchUnpatch = after(found.patchKey, found.patchObj, (_args: any, ret: any) => {
           return React.createElement(ReadAllWrapper, { ret });
         });
-        console.log(`ReadAll: patched via "${name}" (key: ${found.patchKey})`);
-        showToast(`ReadAll: label attached via "${name}" (approximate position)`, getAssetIDByName("ic_check"));
         return;
       }
     }
 
-    console.log("ReadAll: no named candidate matched, trying source-scan fallback...");
     const bySource = findGuildsComponentBySource();
 
     if (bySource?.default) {
       const def = bySource.default;
       let patchKey: "default" | "type" | "render" = "default";
       let patchObj: any = bySource;
-      let fnName = "anonymous";
 
       if (typeof def === "function") {
-        fnName = def.name || "anonymous";
+        // patchKey/patchObj already correct defaults
       } else if (def?.type && typeof def.type === "function") {
         patchKey = "type";
         patchObj = def;
-        fnName = def.type.name || "anonymous";
       } else if (def?.render && typeof def.render === "function") {
         patchKey = "render";
         patchObj = def;
-        fnName = def.render.name || "anonymous";
       }
 
       guildListPatchUnpatch = after(patchKey, patchObj, (_args: any, ret: any) => {
         return React.createElement(ReadAllWrapper, { ret });
       });
-      console.log(`ReadAll: patched via source-scan, function name = "${fnName}"`);
-      showToast(`ReadAll: label attached via source-scan (${fnName})`, getAssetIDByName("ic_check"));
-      return;
     }
-
-    console.log("ReadAll: source-scan also found nothing. Dumping findByProps('guildFolders') for reference...");
-    try {
-      const propsHit = findByProps("guildFolders");
-      console.log(`ReadAll: findByProps('guildFolders') result keys = ${propsHit ? Object.keys(propsHit).join(", ") : "null"}`);
-    } catch (e) {
-      console.log(`ReadAll: findByProps('guildFolders') threw: ${String(e)}`);
-    }
-
-    showToast("ReadAll: no matching guild list component found (see logcat)", getAssetIDByName("ic_close_16px"));
-  } catch (e: any) {
-    console.log(`ReadAll patch error: ${String(e?.stack || e)}`);
-    showToast(`ReadAll patch error: ${String(e?.message || e)}`, getAssetIDByName("ic_close_16px"));
-  }
+  } catch (e) {}
 };
 
 const SettingsComponent = () => {
