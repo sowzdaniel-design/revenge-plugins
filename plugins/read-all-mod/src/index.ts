@@ -364,13 +364,55 @@ const ReadAllWrapper = ({ ret }: { ret: any }) => {
 // when function names don't, so this is a more version-resilient way to
 // locate it. Diagnostic details are logged via console.log, which should
 // show up in `adb logcat` for troubleshooting.
-const GUILD_LIST_CANDIDATES = ["LaunchPad", "GuildsConnected", "Guilds", "GuildsList", "GuildList"];
+// Confirmed via static analysis of Discord's actual compiled bundle
+// (decompiled Hermes bytecode): the guild rail is rendered by a component
+// named "LaunchPadUnreadServers" (file: modules/launchpad/native/
+// LaunchPadUnreadServers.tsx), exported as:
+//   exports.default = React.memo(function LaunchPadUnreadServers() {...})
+// Because it's wrapped in React.memo, the module's `.default` is a memo
+// wrapper *object* (not a plain function), so a naive `findByName` check
+// against `.default.name` never matches — the real function lives on
+// `.default.type`. This search checks plain-function, memo-wrapped, and
+// forwardRef-wrapped shapes so it keeps working if the wrapping changes.
+const GUILD_LIST_CANDIDATES = ["LaunchPadUnreadServers", "LaunchPad", "GuildsConnected", "Guilds", "GuildsList", "GuildList"];
+
+type FoundTarget = { mod: any; patchKey: "default" | "type" | "render"; patchObj: any };
+
+const findComponentByName = (name: string): FoundTarget | null => {
+  try {
+    const mod = find((m: any) => {
+      const def = m?.default;
+      if (!def) return false;
+      if (typeof def === "function" && def.name === name) return true;
+      if (def?.type && typeof def.type === "function" && def.type.name === name) return true;
+      if (def?.render && typeof def.render === "function" && def.render.name === name) return true;
+      return false;
+    });
+
+    if (!mod) return null;
+
+    const def = mod.default;
+    if (typeof def === "function" && def.name === name) {
+      return { mod, patchKey: "default", patchObj: mod };
+    }
+    if (def?.type && typeof def.type === "function" && def.type.name === name) {
+      return { mod, patchKey: "type", patchObj: def };
+    }
+    if (def?.render && typeof def.render === "function" && def.render.name === name) {
+      return { mod, patchKey: "render", patchObj: def };
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+};
 
 const findGuildsComponentBySource = () => {
   try {
     return find((m: any) => {
       try {
-        const fn = m?.default;
+        const def = m?.default;
+        const fn = typeof def === "function" ? def : (def?.type || def?.render);
         if (typeof fn !== "function") return false;
         const src = fn.toString();
         return src.includes("guildFolders") && src.includes("unreadGuilds");
@@ -386,18 +428,12 @@ const findGuildsComponentBySource = () => {
 const patchGuildListButton = () => {
   try {
     for (const name of GUILD_LIST_CANDIDATES) {
-      let mod: any = null;
-      try {
-        mod = findByName(name, false);
-      } catch (e) {
-        continue;
-      }
-
-      if (mod?.default) {
-        guildListPatchUnpatch = after("default", mod, (_args: any, ret: any) => {
+      const found = findComponentByName(name);
+      if (found) {
+        guildListPatchUnpatch = after(found.patchKey, found.patchObj, (_args: any, ret: any) => {
           return React.createElement(ReadAllWrapper, { ret });
         });
-        console.log(`ReadAll: patched via named candidate "${name}"`);
+        console.log(`ReadAll: patched via "${name}" (key: ${found.patchKey})`);
         showToast(`ReadAll: label attached via "${name}"`, getAssetIDByName("ic_check"));
         return;
       }
@@ -407,8 +443,24 @@ const patchGuildListButton = () => {
     const bySource = findGuildsComponentBySource();
 
     if (bySource?.default) {
-      const fnName = bySource.default.name || "anonymous";
-      guildListPatchUnpatch = after("default", bySource, (_args: any, ret: any) => {
+      const def = bySource.default;
+      let patchKey: "default" | "type" | "render" = "default";
+      let patchObj: any = bySource;
+      let fnName = "anonymous";
+
+      if (typeof def === "function") {
+        fnName = def.name || "anonymous";
+      } else if (def?.type && typeof def.type === "function") {
+        patchKey = "type";
+        patchObj = def;
+        fnName = def.type.name || "anonymous";
+      } else if (def?.render && typeof def.render === "function") {
+        patchKey = "render";
+        patchObj = def;
+        fnName = def.render.name || "anonymous";
+      }
+
+      guildListPatchUnpatch = after(patchKey, patchObj, (_args: any, ret: any) => {
         return React.createElement(ReadAllWrapper, { ret });
       });
       console.log(`ReadAll: patched via source-scan, function name = "${fnName}"`);
