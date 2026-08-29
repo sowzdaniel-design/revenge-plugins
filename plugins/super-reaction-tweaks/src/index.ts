@@ -96,7 +96,7 @@ const patchDispatch = (): boolean => {
           showToast(`SuperReactionTweaks: dispatch saw "${actionType}"`, getAssetIDByName("ic_check"));
         }
 
-        if (actionType === "BURST_REACTION_EFFECT_PLAY") {
+        if (actionType === "BURST_REACTION_EFFECT_PLAY" || actionType === "BURST_REACTION_EFFECT_SEND") {
           args[0] = { ...args[0], type: "__SUPER_REACTION_TWEAKS_SUPPRESSED__" };
         }
       } catch (e) {}
