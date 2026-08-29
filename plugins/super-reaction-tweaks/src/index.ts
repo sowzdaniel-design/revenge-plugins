@@ -1,41 +1,41 @@
-import { findByProps, find } from "@vendetta/metro";
-import { before, instead } from "@vendetta/patcher";
-import { showToast } from "@vendetta/ui/toasts";
-import { getAssetIDByName } from "@vendetta/ui/assets";
+import { findByProps } from "@vendetta/metro";
+import { before } from "@vendetta/patcher";
+import { storage } from "@vendetta/plugin";
+import { React } from "@vendetta/metro/common";
+import { Forms } from "@vendetta/ui/components";
 
 // All findings below come from statically decompiling Discord's actual
 // compiled Android bundle (Hermes bytecode), not from guessing — so the
 // function/prop names here are the real, confirmed runtime names.
+//
+// - addReaction(channelId, messageId, emoji, location, options) is the
+//   shared action-creator behind every way you can send a reaction.
+//   Confirmed `location` values: "Message" (manual picker taps and the
+//   quick-reaction bar) and "Double Tap" (the double-tap gesture).
+// - The full-screen "you just sent a Super Reaction" animation on mobile
+//   is triggered by dispatching a Flux action of type
+//   "BURST_REACTION_EFFECT_SEND" — a different, mobile-specific action
+//   from "BURST_REACTION_EFFECT_PLAY" (which Vencord's desktop version
+//   targets, and which is suppressed here too in case it's ever used).
+
+interface Settings {
+  defaultToSuper: boolean;
+  doubleTapToSuper: boolean;
+  removeAnimation: boolean;
+}
+
+const DEFAULT_SETTINGS: Settings = {
+  defaultToSuper: true,
+  doubleTapToSuper: true,
+  removeAnimation: true
+};
+
+const getSettings = (): Settings => {
+  return { ...DEFAULT_SETTINGS, ...storage };
+};
 
 let addReactionUnpatch: (() => void) | null = null;
 let dispatchUnpatch: (() => void) | null = null;
-
-// Feature 1 (default to Super) + Feature 2 (double-tap = Super):
-//
-// The real action-creator signature is:
-//   addReaction(channelId, messageId, emoji, location, options)
-// where options is an object like { burst: boolean }.
-//
-// Every confirmed caller of this specific addReaction (onPressEmoji in the
-// reaction picker, handleAddDefaultDoubleTapReaction for double-tap,
-// AddReactionButton, handleAddOrRemoveReaction) is a "you are sending a
-// reaction" context — never a "someone else's reaction arrived" context
-// (those are handled by separately-named handleReaction/handleReactionBatch
-// functions elsewhere, which this does not touch).
-//
-// This unconditionally forces every outgoing reaction to carry burst: true,
-// regardless of what the caller passed. The full emoji picker's "Super"
-// toggle defaults to off and explicitly passes burst: false until manually
-// toggled — an earlier version of this patch respected that explicit
-// false, which is exactly why the toggle still had to be tapped manually.
-// Forcing it unconditionally makes every reaction path (picker taps,
-// double-tap, quick-reaction bar) behave the same way with no toggling.
-//
-// TEMPORARY: logs a one-time-per-location diagnostic toast so we can see
-// whether the full emoji picker's tap is actually reaching this patched
-// function at all, or routes through a different module entirely. Remove
-// once confirmed.
-const seenLocations = new Set<string>();
 
 const patchAddReaction = (): boolean => {
   try {
@@ -44,14 +44,14 @@ const patchAddReaction = (): boolean => {
 
     addReactionUnpatch = before("addReaction", mod, (args: any[]) => {
       try {
-        const locationKey = String(args[3]);
-        if (!seenLocations.has(locationKey)) {
-          seenLocations.add(locationKey);
-          showToast(`SuperReactionTweaks: addReaction fired, location=${locationKey}`, getAssetIDByName("ic_check"));
-        }
+        const settings = getSettings();
+        const isDoubleTap = args[3] === "Double Tap";
+        const shouldForceBurst = isDoubleTap ? settings.doubleTapToSuper : settings.defaultToSuper;
 
-        const existingOptions = args[4] && typeof args[4] === "object" ? args[4] : {};
-        args[4] = { ...existingOptions, burst: true };
+        if (shouldForceBurst) {
+          const existingOptions = args[4] && typeof args[4] === "object" ? args[4] : {};
+          args[4] = { ...existingOptions, burst: true };
+        }
       } catch (e) {}
       return args;
     });
@@ -62,22 +62,6 @@ const patchAddReaction = (): boolean => {
   }
 };
 
-// Feature 3 (remove the full-screen animation):
-//
-// The animation is triggered by dispatching a Flux action of type
-// "BURST_REACTION_EFFECT_PLAY" (this is the exact same action Vencord's
-// desktop version patches to implement its own playing-limit feature).
-// Rather than patching the standalone playBurstReaction function that
-// creates this dispatch (fragile: if other code already captured a direct
-// reference to that function via destructuring before this patch installs,
-// patching the module property afterward would have no effect on those
-// existing references), this patches Discord's central Flux dispatcher
-// itself and swallows this specific action type before it reaches any
-// listener — dispatch() is a single, stable, virtually always-current
-// method call, not something callers typically hold a stale direct
-// reference to.
-const seenActionTypes = new Set<string>();
-
 const patchDispatch = (): boolean => {
   try {
     const mod = findByProps("dispatch", "subscribe");
@@ -85,18 +69,13 @@ const patchDispatch = (): boolean => {
 
     dispatchUnpatch = before("dispatch", mod, (args: any[]) => {
       try {
+        const settings = getSettings();
         const actionType = args[0]?.type;
 
-        // TEMPORARY: confirms whether BURST_REACTION_EFFECT_PLAY is
-        // actually dispatched for your own outgoing reaction at all, or
-        // whether it's a different action name / mechanism entirely.
-        // Only fires once per distinct action type so it doesn't spam.
-        if (typeof actionType === "string" && actionType.includes("BURST") && !seenActionTypes.has(actionType)) {
-          seenActionTypes.add(actionType);
-          showToast(`SuperReactionTweaks: dispatch saw "${actionType}"`, getAssetIDByName("ic_check"));
-        }
-
-        if (actionType === "BURST_REACTION_EFFECT_PLAY" || actionType === "BURST_REACTION_EFFECT_SEND") {
+        if (
+          settings.removeAnimation &&
+          (actionType === "BURST_REACTION_EFFECT_PLAY" || actionType === "BURST_REACTION_EFFECT_SEND")
+        ) {
           args[0] = { ...args[0], type: "__SUPER_REACTION_TWEAKS_SUPPRESSED__" };
         }
       } catch (e) {}
@@ -109,17 +88,43 @@ const patchDispatch = (): boolean => {
   }
 };
 
+const SettingsComponent = () => {
+  const [settings, setSettings] = React.useState(getSettings());
+
+  const updateSetting = (key: keyof Settings, value: boolean) => {
+    const updated = { ...settings, [key]: value };
+    Object.assign(storage, updated);
+    setSettings(updated);
+  };
+
+  return React.createElement(
+    Forms.FormSection,
+    { title: "Super Reaction Tweaks" },
+    React.createElement(Forms.FormSwitchRow, {
+      label: "Default reactions to Super",
+      subLabel: "Manual picker taps and the quick-reaction bar send Super Reactions without needing to toggle it on.",
+      value: settings.defaultToSuper,
+      onValueChange: (value: boolean) => updateSetting("defaultToSuper", value)
+    }),
+    React.createElement(Forms.FormSwitchRow, {
+      label: "Double-tap sends Super Reaction",
+      subLabel: "Double-tapping a message sends a Super Reaction instead of a normal one.",
+      value: settings.doubleTapToSuper,
+      onValueChange: (value: boolean) => updateSetting("doubleTapToSuper", value)
+    }),
+    React.createElement(Forms.FormSwitchRow, {
+      label: "Remove Super Reaction animation",
+      subLabel: "Skips the full-screen animation that plays after sending a Super Reaction.",
+      value: settings.removeAnimation,
+      onValueChange: (value: boolean) => updateSetting("removeAnimation", value)
+    })
+  );
+};
+
 export default {
   onLoad: () => {
-    const addReactionOk = patchAddReaction();
-    const dispatchOk = patchDispatch();
-
-    if (!addReactionOk || !dispatchOk) {
-      showToast(
-        `SuperReactionTweaks: addReaction=${addReactionOk ? "ok" : "FAILED"}, dispatch-patch=${dispatchOk ? "ok" : "FAILED"}`,
-        getAssetIDByName("ic_close_16px")
-      );
-    }
+    patchAddReaction();
+    patchDispatch();
   },
 
   onUnload: () => {
@@ -135,5 +140,7 @@ export default {
       } catch (e) {}
       dispatchUnpatch = null;
     }
-  }
+  },
+
+  settings: SettingsComponent
 };
