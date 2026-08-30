@@ -1,0 +1,9 @@
+{
+    "name": "View Icons",
+    "description": "Tap a profile avatar or banner to view it in a simple windowed overlay; long-press to download it directly.",
+    "authors": [
+        { "name": "Daniel", "id": "0" }
+    ],
+    "main": "src/index.ts",
+    "vendetta": { "icon": "ic_image" }
+}
