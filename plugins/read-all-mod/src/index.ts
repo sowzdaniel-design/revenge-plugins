@@ -411,7 +411,7 @@ const findGuildsComponentBySource = () => {
   }
 };
 
-const patchGuildListButton = () => {
+const patchGuildListButton = (): boolean => {
   try {
     // Try the precise target first: attach directly to the Messages icon
     // so the label sits right under it.
@@ -420,7 +420,7 @@ const patchGuildListButton = () => {
       guildListPatchUnpatch = after(preciseFound.patchKey, preciseFound.patchObj, (_args: any, ret: any) => {
         return React.createElement(ReadAllAfterWrapper, { ret });
       });
-      return;
+      return true;
     }
 
     for (const name of GUILD_LIST_CANDIDATES) {
@@ -429,7 +429,7 @@ const patchGuildListButton = () => {
         guildListPatchUnpatch = after(found.patchKey, found.patchObj, (_args: any, ret: any) => {
           return React.createElement(ReadAllWrapper, { ret });
         });
-        return;
+        return true;
       }
     }
 
@@ -453,8 +453,30 @@ const patchGuildListButton = () => {
       guildListPatchUnpatch = after(patchKey, patchObj, (_args: any, ret: any) => {
         return React.createElement(ReadAllWrapper, { ret });
       });
+      return true;
     }
-  } catch (e) {}
+
+    return false;
+  } catch (e) {
+    return false;
+  }
+};
+
+// The guild list's underlying module may not be registered in Metro yet the
+// moment this plugin loads (e.g. on a cold app start, before the home
+// screen has actually mounted the guild bar for the first time) since
+// Metro modules are only created the first time something actually uses
+// them. That's why the label previously only appeared after manually
+// toggling the plugin off/on later, once the module was definitely already
+// loaded. Retrying a few times with a short delay covers this without
+// needing a manual refresh.
+const PATCH_RETRY_MAX_ATTEMPTS = 20;
+const PATCH_RETRY_DELAY_MS = 1000;
+
+const patchGuildListButtonWithRetry = (attemptsLeft: number = PATCH_RETRY_MAX_ATTEMPTS) => {
+  const success = patchGuildListButton();
+  if (success || attemptsLeft <= 0) return;
+  setTimeout(() => patchGuildListButtonWithRetry(attemptsLeft - 1), PATCH_RETRY_DELAY_MS);
 };
 
 const SettingsComponent = () => {
@@ -582,7 +604,7 @@ const SettingsComponent = () => {
 export default {
   onLoad: () => {
     initModules();
-    patchGuildListButton();
+    patchGuildListButtonWithRetry();
   },
 
   onUnload: () => {
