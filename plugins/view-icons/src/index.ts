@@ -239,7 +239,24 @@ const loggedMissingUrl = new Set<string>();
 // user object) — calling these directly with the props already passed
 // into the component, rather than trying to find a pre-built URL string
 // somewhere in the render output.
+let loggedBannerDiag = false;
+
 const extractBannerUrl = (props: any): string | null => {
+  if (!loggedBannerDiag) {
+    loggedBannerDiag = true;
+    try {
+      const dp = props?.displayProfile;
+      const hasDp = dp !== undefined && dp !== null;
+      const hasFn = typeof dp?.getBannerURL === "function";
+      showToast(
+        `Banner diag: hasDisplayProfile=${hasDp}, hasGetBannerURL=${hasFn}, propKeys=${Object.keys(props || {}).join(",")}`,
+        getAssetIDByName("ic_check")
+      );
+    } catch (e: any) {
+      showToast(`Banner diag error: ${String(e?.message || e)}`, getAssetIDByName("ic_close_16px"));
+    }
+  }
+
   try {
     const dp = props?.displayProfile;
     if (typeof dp?.getBannerURL === "function") {
