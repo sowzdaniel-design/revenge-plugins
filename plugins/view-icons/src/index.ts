@@ -224,10 +224,15 @@ closeViewer = () => {
 
 // --- Patching avatar/banner ------------------------------------------------
 
+const loggedMissingUrl = new Set<string>();
+
 const patchTappableImage = (componentName: string, filenamePrefix: string): (() => void) | null => {
   try {
     const mod = findByName(componentName, false);
-    if (!mod?.default) return null;
+    if (!mod?.default) {
+      showToast(`ViewIcons: "${componentName}" not found`, getAssetIDByName("ic_close_16px"));
+      return null;
+    }
 
     const def = mod.default;
     const patchKey = typeof def === "function" ? "default" : (def?.type ? "type" : "render");
@@ -235,7 +240,13 @@ const patchTappableImage = (componentName: string, filenamePrefix: string): (() 
 
     return after(patchKey as any, patchObj, (_args: any, ret: any) => {
       const url = findImageUrlInTree(ret);
-      if (!url) return ret;
+      if (!url) {
+        if (!loggedMissingUrl.has(componentName)) {
+          loggedMissingUrl.add(componentName);
+          showToast(`ViewIcons: "${componentName}" found, but no image URL in its render`, getAssetIDByName("ic_close_16px"));
+        }
+        return ret;
+      }
 
       return React.createElement(
         RN.View,
@@ -243,7 +254,10 @@ const patchTappableImage = (componentName: string, filenamePrefix: string): (() 
         ret,
         React.createElement(RN.Pressable, {
           style: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
-          onPress: () => openImageViewer(url),
+          onPress: () => {
+            showToast("ViewIcons: tap detected", getAssetIDByName("ic_check"));
+            openImageViewer(url);
+          },
           onLongPress: () => {
             if (getSettings().downloadEnabled) {
               downloadImageUrl(url, `${filenamePrefix}_${Date.now()}.png`);
@@ -252,7 +266,8 @@ const patchTappableImage = (componentName: string, filenamePrefix: string): (() 
         })
       );
     });
-  } catch (e) {
+  } catch (e: any) {
+    showToast(`ViewIcons: error patching "${componentName}": ${String(e?.message || e)}`, getAssetIDByName("ic_close_16px"));
     return null;
   }
 };
