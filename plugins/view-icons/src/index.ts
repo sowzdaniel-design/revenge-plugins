@@ -232,7 +232,57 @@ closeViewer = () => {
 
 const loggedMissingUrl = new Set<string>();
 
-const patchTappableImage = (componentName: string, filenamePrefix: string): (() => void) | null => {
+// Tries the real .getBannerURL()/.getAvatarURL() methods that Discord's
+// own profile/user objects expose (confirmed via decompiled code showing
+// displayProfile.getBannerURL({canAnimate, size}) used internally, and
+// Vencord's desktop version calling the equivalent .getAvatarURL() on the
+// user object) — calling these directly with the props already passed
+// into the component, rather than trying to find a pre-built URL string
+// somewhere in the render output.
+const extractBannerUrl = (props: any): string | null => {
+  try {
+    const dp = props?.displayProfile;
+    if (typeof dp?.getBannerURL === "function") {
+      const url = dp.getBannerURL({ canAnimate: true, size: 1024 });
+      if (typeof url === "string") return url;
+    }
+  } catch (e) {}
+  return null;
+};
+
+const extractAvatarUrl = (props: any): string | null => {
+  try {
+    const dp = props?.displayProfile;
+    if (typeof dp?.getAvatarURL === "function") {
+      const url = dp.getAvatarURL({ canAnimate: true, size: 512 });
+      if (typeof url === "string") return url;
+    }
+  } catch (e) {}
+
+  try {
+    const user = props?.user;
+    if (typeof user?.getAvatarURL === "function") {
+      const url = user.getAvatarURL(props?.guildId, 512, true);
+      if (typeof url === "string") return url;
+    }
+  } catch (e) {}
+
+  try {
+    const user = props?.user;
+    if (typeof user?.getAvatarURL === "function") {
+      const url = user.getAvatarURL();
+      if (typeof url === "string") return url;
+    }
+  } catch (e) {}
+
+  return null;
+};
+
+const patchTappableImage = (
+  componentName: string,
+  filenamePrefix: string,
+  extractFromProps: (props: any) => string | null
+): (() => void) | null => {
   try {
     const mod = findByName(componentName, false);
     if (!mod?.default) {
@@ -244,12 +294,14 @@ const patchTappableImage = (componentName: string, filenamePrefix: string): (() 
     const patchKey = typeof def === "function" ? "default" : (def?.type ? "type" : "render");
     const patchObj = patchKey === "default" ? mod : def;
 
-    return after(patchKey as any, patchObj, (_args: any, ret: any) => {
-      const url = findImageUrlInTree(ret);
+    return after(patchKey as any, patchObj, (args: any[], ret: any) => {
+      const props = args?.[0];
+      const url = extractFromProps(props) || findImageUrlInTree(ret);
+
       if (!url) {
         if (!loggedMissingUrl.has(componentName)) {
           loggedMissingUrl.add(componentName);
-          showToast(`ViewIcons: "${componentName}" found, but no image URL in its render`, getAssetIDByName("ic_close_16px"));
+          showToast(`ViewIcons: "${componentName}" found, but no image URL`, getAssetIDByName("ic_close_16px"));
         }
         return ret;
       }
@@ -260,10 +312,7 @@ const patchTappableImage = (componentName: string, filenamePrefix: string): (() 
         ret,
         React.createElement(RN.Pressable, {
           style: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
-          onPress: () => {
-            showToast("ViewIcons: tap detected", getAssetIDByName("ic_check"));
-            openImageViewer(url);
-          },
+          onPress: () => openImageViewer(url),
           onLongPress: () => {
             if (getSettings().downloadEnabled) {
               downloadImageUrl(url, `${filenamePrefix}_${Date.now()}.png`);
@@ -301,8 +350,8 @@ const SettingsComponent = () => {
 
 export default {
   onLoad: () => {
-    avatarUnpatch = patchTappableImage("UserProfileAvatar", "avatar");
-    bannerUnpatch = patchTappableImage("UserProfileBanner", "banner");
+    avatarUnpatch = patchTappableImage("UserProfileAvatar", "avatar", extractAvatarUrl);
+    bannerUnpatch = patchTappableImage("UserProfileBanner", "banner", extractBannerUrl);
   },
 
   onUnload: () => {
