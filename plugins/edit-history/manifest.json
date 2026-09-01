@@ -1,0 +1,9 @@
+{
+    "name": "Edit History",
+    "description": "Keeps edited messages visible instead of letting them disappear — including bot messages that use buttons to briefly reveal then re-hide content (embeds included, not just plain text).",
+    "authors": [
+        { "name": "Daniel", "id": "0" }
+    ],
+    "main": "src/index.ts",
+    "vendetta": { "icon": "ic_edit_24px" }
+}
