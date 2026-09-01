@@ -1,9 +1,10 @@
 import { before } from "@vendetta/patcher";
 import { findByProps } from "@vendetta/metro";
-import { FluxDispatcher } from "@vendetta/metro/common";
+import { FluxDispatcher, React } from "@vendetta/metro/common";
 import { storage } from "@vendetta/plugin";
-import { React } from "@vendetta/metro/common";
 import { Forms } from "@vendetta/ui/components";
+import { showToast } from "@vendetta/ui/toasts";
+import { getAssetIDByName } from "@vendetta/ui/assets";
 
 // Based on the real, working approach used by Angelix1/VP's "Message
 // Logger" plugin for Vendetta/Revenge: rather than trying to freeze a
@@ -62,30 +63,48 @@ const extractEmbedText = (embeds: any[] | undefined): string => {
   return parts.join("\n");
 };
 
+let loggedFirstUpdate = false;
+
 const patchMessageUpdates = (): boolean => {
   try {
-    const mod = findByProps("dispatch", "subscribe") || FluxDispatcher;
-    if (!mod?.dispatch) return false;
+    if (!FluxDispatcher?.dispatch) {
+      showToast("EditHistory: FluxDispatcher not available", getAssetIDByName("ic_close_16px"));
+      return false;
+    }
 
     const MessageStore = findByProps("getMessage", "getMessages");
     const ChannelStore = findByProps("getChannel", "getDMFromUserId");
-    if (!MessageStore?.getMessage) return false;
+    if (!MessageStore?.getMessage) {
+      showToast("EditHistory: MessageStore not found", getAssetIDByName("ic_close_16px"));
+      return false;
+    }
 
-    dispatchUnpatch = before("dispatch", mod, (args: any[]) => {
+    dispatchUnpatch = before("dispatch", FluxDispatcher, (args: any[]) => {
       try {
         const event = args[0];
         if (event?.type !== "MESSAGE_UPDATE" || event?.__editHistoryProcessed) return args;
+
+        if (!loggedFirstUpdate) {
+          loggedFirstUpdate = true;
+          showToast(`EditHistory: MESSAGE_UPDATE seen, content="${String(event?.message?.content).slice(0, 40)}"`, getAssetIDByName("ic_check"));
+        }
 
         const channelId = event?.message?.channel_id || event?.channelId;
         const messageId = event?.message?.id || event?.id;
         if (!channelId || !messageId) return args;
 
         const originalMessage = MessageStore.getMessage(channelId, messageId);
-        if (!originalMessage?.author?.id) return args;
+        if (!originalMessage?.author?.id) {
+          showToast("EditHistory: original message not found in store", getAssetIDByName("ic_close_16px"));
+          return args;
+        }
 
         const settings = getSettings();
         const isBot = !!originalMessage.author?.bot;
-        if (isBot && !settings.includeBotEdits) return args;
+        if (isBot && !settings.includeBotEdits) {
+          showToast("EditHistory: skipped (bot edits disabled in settings)", getAssetIDByName("ic_close_16px"));
+          return args;
+        }
 
         const oldContent = originalMessage?.content || "";
         const newContent = event?.message?.content ?? oldContent;
@@ -96,7 +115,13 @@ const patchMessageUpdates = (): boolean => {
         const contentChanged = newContent !== oldContent;
         const embedChanged = newEmbedText !== oldEmbedText && (oldEmbedText || newEmbedText);
 
-        if (!contentChanged && !embedChanged) return args;
+        if (!contentChanged && !embedChanged) {
+          showToast(
+            `EditHistory: no change detected (old="${oldContent.slice(0, 20)}" new="${newContent.slice(0, 20)}" oldEmbed="${oldEmbedText.slice(0, 20)}" newEmbed="${newEmbedText.slice(0, 20)}")`,
+            getAssetIDByName("ic_close_16px")
+          );
+          return args;
+        }
 
         const separator = `\n\n${settings.separator}\n\n`;
 
