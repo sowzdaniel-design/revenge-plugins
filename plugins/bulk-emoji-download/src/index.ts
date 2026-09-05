@@ -195,10 +195,10 @@ const downloadAllServerEmojis = async (guildId: string, guildName: string) => {
 
     try {
       const MediaManager = findByProps("MediaManager")?.MediaManager || RN?.NativeModules?.MediaManager;
-      if (MediaManager?.downloadMediaAssetWithContentType) {
-        await MediaManager.downloadMediaAssetWithContentType(publicUrl, filename, "application/zip");
-      } else if (MediaManager?.downloadMediaAsset) {
+      if (MediaManager?.downloadMediaAsset) {
         await MediaManager.downloadMediaAsset(publicUrl, filename);
+      } else if (MediaManager?.downloadMediaAssetWithContentType) {
+        await MediaManager.downloadMediaAssetWithContentType(publicUrl, filename, "application/zip");
       } else {
         throw new Error("MediaManager not found");
       }
