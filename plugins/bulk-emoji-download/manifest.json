@@ -1,0 +1,9 @@
+{
+    "name": "Bulk Emoji Download",
+    "description": "Downloads every custom emoji in the current server as a single zip file. Run /downloademojis in any channel of the server.",
+    "authors": [
+        { "name": "Daniel", "id": "0" }
+    ],
+    "main": "src/index.ts",
+    "vendetta": { "icon": "ic_download_24px" }
+}
