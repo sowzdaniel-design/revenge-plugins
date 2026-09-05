@@ -145,8 +145,6 @@ const downloadAllServerEmojis = async (guildId: string, guildName: string) => {
 
     await FileManager.writeFile("cache", relativePath, zipBase64, "base64");
 
-    // Hand the finished file to the user via the OS share sheet, so they
-    // can save it wherever they like (Downloads, Drive, etc.).
     let appDir = "";
     try {
       const AppDirModule = findByProps("getAppDir");
@@ -156,14 +154,35 @@ const downloadAllServerEmojis = async (guildId: string, guildName: string) => {
     const fullPath = `${appDir}cache/${relativePath}`;
     const fileUri = fullPath.startsWith("file://") ? fullPath : `file://${fullPath}`;
 
+    // Use Discord's own native download bridge (the same one used to save
+    // regular image/media downloads to the Downloads folder) instead of
+    // RN's generic Share API. Android blocks apps from directly sharing a
+    // raw local file:// path to other apps (needs a FileProvider set up in
+    // the Android manifest, which isn't something a JS-only plugin can
+    // add) — that's exactly why the share-sheet attempt produced an
+    // unopenable link instead of a real file. Discord's own MediaManager
+    // bridge already has that permission plumbing set up, since it's what
+    // every normal download already goes through.
     try {
-      await RN.Share.share({ url: fileUri, title: `${safeGuildName} emojis.zip` });
-    } catch (e) {
-      showToast(`Saved to app cache: ${relativePath} (share failed)`, getAssetIDByName("ic_check"));
-      return;
+      const MediaManager = findByProps("MediaManager")?.MediaManager || RN?.NativeModules?.MediaManager;
+      if (MediaManager?.downloadMediaAssetWithContentType) {
+        await MediaManager.downloadMediaAssetWithContentType(fileUri, `${safeGuildName}_emojis.zip`, "application/zip");
+      } else if (MediaManager?.downloadMediaAsset) {
+        await MediaManager.downloadMediaAsset(fileUri, `${safeGuildName}_emojis.zip`);
+      } else {
+        throw new Error("MediaManager not found");
+      }
+      showToast(`Downloaded ${successCount}/${emojis.length} emojis to Downloads`, getAssetIDByName("ic_check"));
+    } catch (e: any) {
+      // Fall back to the share sheet if the direct download call fails for
+      // some reason, so the user still has *some* way to retrieve the file.
+      try {
+        await RN.Share.share({ url: fileUri, title: `${safeGuildName} emojis.zip` });
+        showToast(`Downloaded ${successCount}/${emojis.length} emojis (via share sheet)`, getAssetIDByName("ic_check"));
+      } catch (e2) {
+        showToast(`Saved to app cache but couldn't export it: ${relativePath}`, getAssetIDByName("ic_close_16px"));
+      }
     }
-
-    showToast(`Downloaded ${successCount}/${emojis.length} emojis`, getAssetIDByName("ic_check"));
   } catch (e: any) {
     showToast(`Failed to build zip: ${String(e?.message || e)}`, getAssetIDByName("ic_close_16px"));
   }
