@@ -196,9 +196,11 @@ const downloadAllServerEmojis = async (guildId: string, guildName: string) => {
     try {
       const MediaManager = findByProps("MediaManager")?.MediaManager || RN?.NativeModules?.MediaManager;
       if (MediaManager?.downloadMediaAsset) {
-        await MediaManager.downloadMediaAsset(publicUrl, filename);
-      } else if (MediaManager?.downloadMediaAssetWithContentType) {
-        await MediaManager.downloadMediaAssetWithContentType(publicUrl, filename, "application/zip");
+        // Confirmed real signature from the published Stealmoji plugin:
+        // downloadMediaAsset(url, 0 | 1) — a numeric type flag (0 = static
+        // image, 1 = gif), not a filename. The native side likely derives
+        // the saved filename from the URL itself.
+        await MediaManager.downloadMediaAsset(publicUrl, 0);
       } else {
         throw new Error("MediaManager not found");
       }
