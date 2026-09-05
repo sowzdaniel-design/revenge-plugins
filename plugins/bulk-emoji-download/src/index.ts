@@ -141,7 +141,8 @@ const downloadAllServerEmojis = async (guildId: string, guildName: string) => {
     }
 
     const safeGuildName = String(guildName || guildId).replace(/[^a-zA-Z0-9_-]/g, "_");
-    const relativePath = `emoji_downloads/${safeGuildName}_emojis.zip`;
+    const filename = `${safeGuildName}_emojis.zip`;
+    const relativePath = `emoji_downloads/${filename}`;
 
     await FileManager.writeFile("cache", relativePath, zipBase64, "base64");
 
@@ -154,34 +155,56 @@ const downloadAllServerEmojis = async (guildId: string, guildName: string) => {
     const fullPath = `${appDir}cache/${relativePath}`;
     const fileUri = fullPath.startsWith("file://") ? fullPath : `file://${fullPath}`;
 
-    // Use Discord's own native download bridge (the same one used to save
-    // regular image/media downloads to the Downloads folder) instead of
-    // RN's generic Share API. Android blocks apps from directly sharing a
-    // raw local file:// path to other apps (needs a FileProvider set up in
-    // the Android manifest, which isn't something a JS-only plugin can
-    // add) — that's exactly why the share-sheet attempt produced an
-    // unopenable link instead of a real file. Discord's own MediaManager
-    // bridge already has that permission plumbing set up, since it's what
-    // every normal download already goes through.
+    // Discord's own native download bridge (MediaManager, used for every
+    // normal image/media download) only works with a genuine remote URL —
+    // it fetches the URL itself internally, so it can't be pointed at a
+    // file that only exists locally on this device (confirmed: it threw
+    // when given our local file:// path). And Android blocks apps from
+    // directly sharing a raw local file to other apps without a
+    // FileProvider set up in the Android manifest, which a JS-only plugin
+    // can't add — that's why the share-sheet route produced a broken link
+    // instead of a real file.
+    //
+    // So: upload the local zip to catbox.moe (a simple, well-known
+    // anonymous file host) to get a genuine public URL, then hand that
+    // real URL to MediaManager exactly like it were a normal Discord
+    // attachment — since at that point it actually is a normal remote
+    // download, the same pathway that already works for everything else.
+    showToast("Uploading zip...", getAssetIDByName("ic_download_24px"));
+
+    let publicUrl: string;
+    try {
+      const formData = new FormData();
+      formData.append("reqtype", "fileupload");
+      formData.append("fileToUpload", { uri: fileUri, type: "application/zip", name: filename } as any);
+
+      const uploadResp = await fetch("https://catbox.moe/user/api.php", {
+        method: "POST",
+        body: formData as any
+      });
+      const uploadText = (await uploadResp.text()).trim();
+
+      if (!uploadText.startsWith("http")) {
+        throw new Error(uploadText || "upload failed");
+      }
+      publicUrl = uploadText;
+    } catch (e: any) {
+      showToast(`Couldn't upload zip: ${String(e?.message || e)}`, getAssetIDByName("ic_close_16px"));
+      return;
+    }
+
     try {
       const MediaManager = findByProps("MediaManager")?.MediaManager || RN?.NativeModules?.MediaManager;
       if (MediaManager?.downloadMediaAssetWithContentType) {
-        await MediaManager.downloadMediaAssetWithContentType(fileUri, `${safeGuildName}_emojis.zip`, "application/zip");
+        await MediaManager.downloadMediaAssetWithContentType(publicUrl, filename, "application/zip");
       } else if (MediaManager?.downloadMediaAsset) {
-        await MediaManager.downloadMediaAsset(fileUri, `${safeGuildName}_emojis.zip`);
+        await MediaManager.downloadMediaAsset(publicUrl, filename);
       } else {
         throw new Error("MediaManager not found");
       }
       showToast(`Downloaded ${successCount}/${emojis.length} emojis to Downloads`, getAssetIDByName("ic_check"));
     } catch (e: any) {
-      // Fall back to the share sheet if the direct download call fails for
-      // some reason, so the user still has *some* way to retrieve the file.
-      try {
-        await RN.Share.share({ url: fileUri, title: `${safeGuildName} emojis.zip` });
-        showToast(`Downloaded ${successCount}/${emojis.length} emojis (via share sheet)`, getAssetIDByName("ic_check"));
-      } catch (e2) {
-        showToast(`Saved to app cache but couldn't export it: ${relativePath}`, getAssetIDByName("ic_close_16px"));
-      }
+      showToast(`Uploaded, but couldn't trigger download: ${String(e?.message || e)}. Link: ${publicUrl}`, getAssetIDByName("ic_close_16px"));
     }
   } catch (e: any) {
     showToast(`Failed to build zip: ${String(e?.message || e)}`, getAssetIDByName("ic_close_16px"));
