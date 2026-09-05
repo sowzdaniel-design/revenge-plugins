@@ -3,7 +3,7 @@ import { registerCommand } from "@vendetta/commands";
 import { ReactNative as RN } from "@vendetta/metro/common";
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
-import JSZip from "jszip";
+import { zipSync } from "fflate";
 
 // All findings below come from statically decompiling Discord's actual
 // compiled Android bundle, and from a real, published third-party plugin
@@ -21,12 +21,60 @@ import JSZip from "jszip";
 //   showing this exact call pattern already used elsewhere in Discord's
 //   own code for writing binary data to the app's cache directory).
 //
+// Zipping uses fflate instead of jszip — jszip has Node.js-oriented
+// internals that can crash immediately on import in this stripped-down
+// Hermes/React Native environment (which is what caused the plugin to be
+// unable to enable at all). fflate is built to work in any JS environment
+// with no Node dependencies.
+//
 // The one piece not verified against a real, working example is the final
 // "hand the finished zip to the user" step (RN's Share API) — this is a
 // standard, always-available React Native capability, but hasn't been
 // tested live yet and may need adjustment.
 
 let commandUnregister: (() => void) | null = null;
+
+// Manual base64 <-> Uint8Array conversion, avoiding any assumption about
+// atob/btoa being available in this JS environment.
+const BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+const base64ToUint8Array = (base64: string): Uint8Array => {
+  const clean = base64.replace(/[^A-Za-z0-9+/]/g, "");
+  const byteLength = Math.floor((clean.length * 3) / 4) - (clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0);
+  const bytes = new Uint8Array(byteLength);
+
+  let byteIndex = 0;
+  for (let i = 0; i < clean.length; i += 4) {
+    const c1 = BASE64_CHARS.indexOf(clean[i]);
+    const c2 = BASE64_CHARS.indexOf(clean[i + 1]);
+    const c3 = BASE64_CHARS.indexOf(clean[i + 2]);
+    const c4 = BASE64_CHARS.indexOf(clean[i + 3]);
+
+    if (byteIndex < byteLength) bytes[byteIndex++] = (c1 << 2) | (c2 >> 4);
+    if (byteIndex < byteLength) bytes[byteIndex++] = ((c2 & 0xf) << 4) | (c3 >> 2);
+    if (byteIndex < byteLength) bytes[byteIndex++] = ((c3 & 0x3) << 6) | (c4 & 0x3f);
+  }
+
+  return bytes;
+};
+
+const uint8ArrayToBase64 = (bytes: Uint8Array): string => {
+  let result = "";
+  const len = bytes.length;
+
+  for (let i = 0; i < len; i += 3) {
+    const b1 = bytes[i];
+    const b2 = i + 1 < len ? bytes[i + 1] : 0;
+    const b3 = i + 2 < len ? bytes[i + 2] : 0;
+
+    result += BASE64_CHARS[b1 >> 2];
+    result += BASE64_CHARS[((b1 & 0x3) << 4) | (b2 >> 4)];
+    result += i + 1 < len ? BASE64_CHARS[((b2 & 0xf) << 2) | (b3 >> 6)] : "=";
+    result += i + 2 < len ? BASE64_CHARS[b3 & 0x3f] : "=";
+  }
+
+  return result;
+};
 
 const fetchAsBase64 = (url: string): Promise<string> => {
   return fetch(url)
@@ -61,7 +109,7 @@ const downloadAllServerEmojis = async (guildId: string, guildName: string) => {
 
   showToast(`Downloading ${emojis.length} emojis...`, getAssetIDByName("ic_download_24px"));
 
-  const zip = new JSZip();
+  const files: Record<string, Uint8Array> = {};
   let successCount = 0;
 
   for (const emoji of emojis) {
@@ -70,7 +118,7 @@ const downloadAllServerEmojis = async (guildId: string, guildName: string) => {
       const url = `https://cdn.discordapp.com/emojis/${emoji.id}.${ext}`;
       const base64 = await fetchAsBase64(url);
       const safeName = String(emoji.name || emoji.id).replace(/[^a-zA-Z0-9_-]/g, "_");
-      zip.file(`${safeName}.${ext}`, base64, { base64: true });
+      files[`${safeName}.${ext}`] = base64ToUint8Array(base64);
       successCount++;
     } catch (e) {
       // Skip individual failures, keep going with the rest.
@@ -83,7 +131,9 @@ const downloadAllServerEmojis = async (guildId: string, guildName: string) => {
   }
 
   try {
-    const zipBase64 = await zip.generateAsync({ type: "base64" });
+    const zipBytes = zipSync(files);
+    const zipBase64 = uint8ArrayToBase64(zipBytes);
+
     const FileManager = getFileManager();
     if (!FileManager) {
       showToast("Couldn't find the file-writing function on this build", getAssetIDByName("ic_close_16px"));
@@ -109,7 +159,7 @@ const downloadAllServerEmojis = async (guildId: string, guildName: string) => {
     try {
       await RN.Share.share({ url: fileUri, title: `${safeGuildName} emojis.zip` });
     } catch (e) {
-      showToast(`Saved to app cache: ${relativePath} (share failed, see settings for manual path)`, getAssetIDByName("ic_check"));
+      showToast(`Saved to app cache: ${relativePath} (share failed)`, getAssetIDByName("ic_check"));
       return;
     }
 
