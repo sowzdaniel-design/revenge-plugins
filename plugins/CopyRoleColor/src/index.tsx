@@ -33,7 +33,11 @@ function patchTree(result: any, args: any[]) {
     if (!result) return; const colors = getColors(args, result); if (!colors.length) return;
     const pressable = findInReactTree(result, (m: any) => { const p = m?.props; return !!p && typeof p.onPress === "function" && (p.onLongPress == null || typeof p.onLongPress === "function"); });
     const target = pressable || result; if (!target?.props) return;
-    target.props.onLongPress = () => { clipboard.setString(colors.join(" ")); showToast(colors.length > 1 ? `Copied ${colors.length} role colors` : "Copied role color to clipboard", getAssetIDByName("ic_message_copy")); };
+    // Normal tap = copy the role color(s). Keep Discord's existing onLongPress
+    // handler untouched so a long press continues to perform Discord's normal
+    // role-ID copy action.
+    const copyColors = () => { clipboard.setString(colors.join(" ")); showToast(colors.length > 1 ? `Copied ${colors.length} role colors` : "Copied role color to clipboard", getAssetIDByName("ic_message_copy")); };
+    target.props.onPress = copyColors;
 }
 function patchCandidate(mod: any) {
     if (!mod || patched.has(mod)) return;
