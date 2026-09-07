@@ -1,14 +1,7 @@
 {
-    "name": "CopyRoleColor",
-    "description": "Copy a role's color as hex by long pressing it, including gradient and holographic role colors",
-    "authors": [
-        {
-            "name": "MSMA",
-            "id": "307215253811363843"
-        }
-    ],
-    "main": "src/index.tsx",
-    "vendetta": {
-        "icon": "ic_custom_color"
-    }
+  "name": "CopyRoleColor",
+  "description": "Copy role colors by long pressing role pills, including gradient and holographic colors",
+  "authors": [{ "name": "MSMA", "id": "307215253811363843" }],
+  "main": "src/index.tsx",
+  "vendetta": { "icon": "ic_message_copy" }
 }
