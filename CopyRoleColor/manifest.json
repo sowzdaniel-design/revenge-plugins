@@ -1,1 +1,1 @@
-{"name":"CopyRoleColor","description":"Tap a Discord role pill to copy its role color","authors":[{"name":"MSMA","id":"307215253811363843"}],"main":"index.js","vendetta":{"icon":"ic_message_copy"},"hash":"b8b749ddc472967b9c1d0f8f19eddff6d632f18563be6c91619b323fe4fdb8d8"}
+{"name":"CopyRoleColor","description":"Copy Discord role colors by tapping role pills on Discord 333.12","authors":[{"name":"MSMA","id":"307215253811363843"}],"main":"index.js","vendetta":{"icon":"ic_custom_color"},"hash":"b8b749ddc472967b9c1d0f8f19eddff6d632f18563be6c91619b323fe4fdb8d8"}
