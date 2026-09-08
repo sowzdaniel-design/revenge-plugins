@@ -1,65 +1,118 @@
 import { patcher } from "@vendetta";
-import * as metro from "@vendetta/metro";
-import { findInReactTree } from "@vendetta/utils";
-import { getAssetIDByName } from "@vendetta/ui/assets";
 import { clipboard } from "@vendetta/metro/common";
 import { showToast } from "@vendetta/ui/toasts";
+import { getAssetIDByName } from "@vendetta/ui/assets";
 
 const unpatches: (() => void)[] = [];
-const patched = new Set<any>();
+const seen = new WeakSet<object>();
 
-const hex = (v: any): string | null => {
-    if (typeof v === "number" && Number.isFinite(v)) return `#${(v & 0xffffff).toString(16).padStart(6, "0").toUpperCase()}`;
-    if (typeof v !== "string") return null;
-    const m = v.trim().match(/^#?([0-9a-f]{6})(?:[0-9a-f]{2})?$/i);
-    return m ? `#${m[1].toUpperCase()}` : null;
-};
-function push(out: string[], v: any) { const h = hex(v); if (h && !out.includes(h)) out.push(h); }
-function gradients(out: string[], v: any) { if (typeof v !== "string") return; for (const m of v.match(/#[0-9a-f]{6}(?:[0-9a-f]{2})?/gi) || []) push(out, m); }
-function inspect(x: any, out: string[], depth = 0, seen = new Set<any>()) {
-    if (!x || depth > 7 || (typeof x !== "object" && typeof x !== "function") || seen.has(x)) return;
-    seen.add(x); const p = x.props || x;
-    const role = p.role || p.roleData || p.guildRole || p.guild_role || p.guildRoleData;
-    const colors = p.colors || role?.colors || role?.color_data || role?.colorData;
-    if (colors) { push(out, colors.primary_color); push(out, colors.secondary_color); push(out, colors.tertiary_color); push(out, colors.primaryColor); push(out, colors.secondaryColor); push(out, colors.tertiaryColor); }
-    for (const k of ["color","roleColor","primary_color","secondary_color","tertiary_color","primaryColor","secondaryColor","tertiaryColor","backgroundColor"]) push(out, role?.[k] ?? p[k]);
-    for (const k of ["backgroundImage","backgroundGradient","gradient","roleColor","backgroundColor"]) gradients(out, role?.[k] ?? p[k]);
-    const styles = Array.isArray(p.style) ? p.style : [p.style];
-    for (const s of styles) { if (!s) continue; push(out, s.backgroundColor); push(out, s.color); gradients(out, s.backgroundColor); gradients(out, s.backgroundImage); }
-    if (p.children) { const children = Array.isArray(p.children) ? p.children : [p.children]; for (const c of children) inspect(c, out, depth + 1, seen); }
+function hex(n: any) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return null;
+  return "#" + (n >>> 0).toString(16).padStart(6, "0").slice(-6);
 }
-function getColors(args: any[], result: any) { const out: string[] = []; inspect(result, out); for (const a of args || []) inspect(a, out); return out.slice(0, 3); }
-function patchTree(result: any, args: any[]) {
-    if (!result) return; const colors = getColors(args, result); if (!colors.length) return;
-    const pressable = findInReactTree(result, (m: any) => { const p = m?.props; return !!p && typeof p.onPress === "function" && (p.onLongPress == null || typeof p.onLongPress === "function"); });
-    const target = pressable || result; if (!target?.props) return;
-    // Normal tap = copy the role color(s). Keep Discord's existing onLongPress
-    // handler untouched so a long press continues to perform Discord's normal
-    // role-ID copy action.
-    const copyColors = () => { clipboard.setString(colors.join(" ")); showToast(colors.length > 1 ? `Copied ${colors.length} role colors` : "Copied role color to clipboard", getAssetIDByName("ic_message_copy")); };
-    target.props.onPress = copyColors;
+
+function normalize(v: any) {
+  if (typeof v !== "string") return null;
+  const s = v.trim();
+  if (/^#[0-9a-f]{6,8}$/i.test(s)) return s.slice(0, 7).toUpperCase();
+  return null;
 }
-function patchCandidate(mod: any) {
-    if (!mod || patched.has(mod)) return;
-    const fn = typeof mod === "function" ? mod : typeof mod.default === "function" ? mod.default : typeof mod.default?.default === "function" ? mod.default.default : null;
-    if (!fn) return; patched.add(mod);
-    try { unpatches.push(patcher.after("default", mod, (args: any[], res: any) => patchTree(res, args))); return; } catch {}
-    try { unpatches.push(patcher.after("default", { default: fn }, (args: any[], res: any) => patchTree(res, args))); } catch {}
-}
-function discover() {
-    const candidates: any[] = []; const names = ["RolePill", "RolePillComponent", "ThemedRolePill"];
-    for (const name of names) for (const def of [false, true]) {
-        try { candidates.push((metro as any).findByName(name, def)); } catch {}
-        try { candidates.push((metro as any).findByDisplayName(name, def)); } catch {}
-        try { candidates.push((metro as any).findByTypeName(name, def)); } catch {}
+
+function findColors(root: any) {
+  const found: string[] = [];
+  const visited = new Set<any>();
+  const add = (v: any) => {
+    const h = typeof v === "number" ? hex(v) : normalize(v);
+    if (h && !found.includes(h)) found.push(h);
+  };
+  const walk = (x: any, depth: number) => {
+    if (!x || depth > 5 || found.length >= 3) return;
+    const t = typeof x;
+    if (t !== "object" && t !== "function") return;
+    if (visited.has(x)) return;
+    visited.add(x);
+    if (Array.isArray(x)) { for (const y of x) walk(y, depth + 1); return; }
+    for (const k of Object.keys(x).slice(0, 80)) {
+      let v: any;
+      try { v = x[k]; } catch { continue; }
+      const lk = k.toLowerCase();
+      if (lk === "primary_color" || lk === "secondary_color" || lk === "tertiary_color" ||
+          lk === "rolecolor" || lk === "role_color" || lk === "rolepillbackgroundcolor") add(v);
+      else if (lk === "backgroundcolor") add(v);
+      else if (depth < 4 && (lk === "role" || lk === "colors" || lk === "style" || lk === "props" || lk === "children")) walk(v, depth + 1);
     }
-    try {
-        const all = (metro as any).findAll((m: any) => [m, m?.default, m?.default?.default].filter(Boolean).some((v: any) => /role.?pill/i.test(String(v?.displayName || v?.name || v?.type?.name || v?.render?.name || ""))));
-        if (Array.isArray(all)) candidates.push(...all);
-    } catch {}
-    for (const c of candidates) patchCandidate(c);
+  };
+  walk(root, 0);
+  return found;
 }
+
+function looksLikeRolePill(type: any, props: any, colors: string[]) {
+  if (!props) return false;
+  const n = typeof type === "function" ? (type.displayName || type.name || "") : "";
+  if (/rolepill|rolepills|roledot/i.test(String(n))) return true;
+  if (colors.length && props.onLongPress) {
+    // Discord's role pills are the colored pressable elements; avoid hijacking unrelated buttons.
+    const s = props.style;
+    const flat = Array.isArray(s) ? s : [s];
+    return flat.some((z: any) => z && (z.borderRadius != null || z.backgroundColor != null));
+  }
+  return false;
+}
+
+function wrapElement(type: any, props: any) {
+  if (!props || typeof props !== "object") return props;
+  const colors = findColors(props);
+  if (!looksLikeRolePill(type, props, colors)) return props;
+  const out = { ...props };
+  const oldPress = out.onPress;
+  out.onPress = (...args: any[]) => {
+    const now = findColors(out);
+    const values = now.length ? now : colors;
+    if (!values.length) return oldPress?.(...args);
+    clipboard.setString(values.join(" "));
+    showToast("Copied role color" + (values.length > 1 ? "s" : ""), getAssetIDByName("ic_message_copy"));
+  };
+  // Keep Discord's long-press handler completely untouched.
+  return out;
+}
+
+function patchReactModule(mod: any) {
+  if (!mod || typeof mod !== "object") return;
+  for (const key of ["jsx", "jsxs", "jsxDEV", "createElement"]) {
+    const fn = mod[key];
+    if (typeof fn !== "function" || (fn as any).__crc) continue;
+    try {
+      (fn as any).__crc = true;
+      unpatches.push(patcher.instead(key, mod, (args: any[]) => {
+        // JSX: (type, props, key). createElement uses the same first two arguments.
+        if (args.length > 1) args[1] = wrapElement(args[0], args[1]);
+        return fn.apply(mod, args);
+      }));
+    } catch {}
+  }
+}
+
+function scan() {
+  try {
+    const metro: any = (globalThis as any).vendetta?.metro;
+    const modules = metro?.modules || (globalThis as any).modules;
+    if (!modules) return;
+    for (const m of Object.values(modules) as any[]) {
+      if (!m || typeof m !== "object") continue;
+      patchReactModule(m);
+      patchReactModule(m.exports);
+      patchReactModule(m.publicModule?.exports);
+    }
+  } catch {}
+}
+
 export default {
-    onLoad: () => { discover(); const timer = setInterval(discover, 2000); unpatches.push(() => clearInterval(timer)); },
-    onUnload: () => { for (const u of unpatches.splice(0)) try { u(); } catch {} patched.clear(); },
+  onLoad: () => {
+    scan();
+    const id = setInterval(scan, 1000);
+    unpatches.push(() => clearInterval(id));
+  },
+  onUnload: () => {
+    unpatches.splice(0).forEach(u => { try { u(); } catch {} });
+  },
 };
