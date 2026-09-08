@@ -1,140 +1,141 @@
-import { patcher } from "@vendetta";
+import { patcher, metro } from "@vendetta";
 import { clipboard } from "@vendetta/metro/common";
 import { showToast } from "@vendetta/ui/toasts";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 
 const unpatches: (() => void)[] = [];
-const patched = new WeakSet<Function>();
+let installed = false;
 
-function hex(n: unknown) {
+const MARK = "__copyRoleColor33312";
+
+function hex(n: any) {
   if (typeof n !== "number" || !Number.isFinite(n)) return null;
-  return "#" + (n >>> 0).toString(16).padStart(6, "0").slice(-6).toUpperCase();
+  return "#" + Math.max(0, Math.min(0xffffff, n >>> 0)).toString(16).padStart(6, "0").toUpperCase();
 }
 
-function color(v: unknown) {
-  if (typeof v === "number") return hex(v);
-  if (typeof v !== "string") return null;
-  const s = v.trim();
-  return /^#[0-9a-f]{6,8}$/i.test(s) ? s.slice(0, 7).toUpperCase() : null;
+function normalizeColor(v: any): string | null {
+  if (typeof v === "string") {
+    if (/^#[0-9a-f]{6}$/i.test(v)) return v.toUpperCase();
+    if (/^#[0-9a-f]{8}$/i.test(v)) return ("#" + v.slice(-6)).toUpperCase();
+  }
+  return hex(v);
 }
 
-function getRoleColors(x: any): string[] {
-  if (!x || typeof x !== "object") return [];
+function findColors(value: any, seen = new Set<any>(), depth = 0): string[] {
+  if (value == null || depth > 6 || seen.has(value)) return [];
+  if (typeof value !== "object" && typeof value !== "function") return [];
+  seen.add(value);
   const out: string[] = [];
-  const add = (v: unknown) => {
-    const c = color(v);
-    if (c && !out.includes(c)) out.push(c);
-  };
 
-  // Discord 333.12 role objects use colors.primary_color / secondary_color / tertiary_color.
-  const candidates = [x, x.role, x.colors, x.role?.colors, x.props, x.props?.role, x.props?.role?.colors];
-  for (const o of candidates) {
-    if (!o || typeof o !== "object") continue;
-    add(o.primary_color);
-    add(o.secondary_color);
-    add(o.tertiary_color);
-    add(o.primaryColor);
-    add(o.secondaryColor);
-    add(o.tertiaryColor);
-    add(o.roleColor);
-    add(o.role_color);
-  }
-  return out;
-}
+  const add = (v: any) => { const c = normalizeColor(v); if (c && !out.includes(c)) out.push(c); };
 
-function patchReturnedElement(node: any, colors: string[]): any {
-  if (!node || typeof node !== "object" || !colors.length) return node;
+  if (typeof value === "object") {
+    for (const k of ["primary_color", "secondary_color", "tertiary_color", "primaryColor", "secondaryColor", "tertiaryColor", "roleColor", "color"]) {
+      if (k in value) add(value[k]);
+    }
+    if (value.colors) {
+      for (const k of ["primary_color", "secondary_color", "tertiary_color", "primaryColor", "secondaryColor", "tertiaryColor"]) add(value.colors[k]);
+    }
+    const styles = value.style;
+    if (Array.isArray(styles)) for (const s of styles) if (s) {
+      add(s.backgroundColor); add(s.borderColor); add(s.color);
+    }
+    else if (styles) { add(styles.backgroundColor); add(styles.borderColor); add(styles.color); }
 
-  // Only modify the actual pressable returned by the RolePill component.
-  if (node.props && typeof node.props === "object") {
-    const p = node.props;
-    const roleColors = getRoleColors(p);
-    const all = roleColors.length ? roleColors : colors;
-
-    if (p.onPress && all.length) {
-      const copy = { ...p };
-      const original = p.onPress;
-      copy.onPress = (...args: any[]) => {
-        const latest = getRoleColors(copy).length ? getRoleColors(copy) : all;
-        clipboard.setString(latest.join(" "));
-        showToast("Copied role color" + (latest.length > 1 ? "s" : ""), getAssetIDByName("ic_message_copy"));
-      };
-      // Deliberately do not touch onLongPress.
-      return { ...node, props: copy };
+    for (const k of Object.keys(value)) {
+      if (/^(role|props|style|colors|rolePill|roleDot|themed)/i.test(k)) {
+        out.push(...findColors(value[k], seen, depth + 1));
+      }
     }
   }
-
-  return node;
+  return [...new Set(out)];
 }
 
-function functionSource(fn: Function) {
-  try { return Function.prototype.toString.call(fn); } catch { return ""; }
+function copyFrom(args: any[], result: any) {
+  const colors = [...findColors(args), ...findColors(result)];
+  const unique = [...new Set(colors)];
+  if (!unique.length) return false;
+  clipboard.setString(unique.join(" "));
+  try { showToast("Copied role color", getAssetIDByName("ic_message_copy")); } catch (_) { showToast("Copied role color"); }
+  return true;
 }
 
-function patchRolePillModule(mod: any) {
-  if (!mod || typeof mod !== "object") return;
+function patchCandidate(obj: any, key: string) {
+  if (!obj || typeof obj[key] !== "function" || obj[key][MARK]) return false;
+  const fn = obj[key];
+  let src = "";
+  try { src = Function.prototype.toString.call(fn); } catch (_) {}
+  if (!/rolePillBackgroundColor|roleDotStyle|useRoleColorSettingValue|RolePill/i.test(src)) return false;
 
-  for (const [key, value] of Object.entries(mod)) {
-    if (typeof value !== "function" || patched.has(value as Function)) continue;
-
-    const src = functionSource(value as Function);
-    // These identifiers come from Discord 333.12's actual RolePill implementation.
-    if (!/rolePillBackgroundColor|roleDotStyle|useRoleColorSettingValue/.test(src)) continue;
-
-    try {
-      patched.add(value as Function);
-      unpatches.push(patcher.after(key, mod, (_args: any[], result: any) => {
-        try {
-          const args = _args?.[0];
-          const colors = getRoleColors(args);
-          return patchReturnedElement(result, colors);
-        } catch {
-          return result;
-        }
-      }));
-    } catch {
-      // If Discord exposes the function through a frozen/nonstandard export, do nothing.
-      // Never patch globally and never risk crashing the client.
-    }
-  }
+  const un = patcher.after(key, obj, (args: any[], res: any) => {
+    if (!res || !res.props || res.props[MARK]) return res;
+    Object.defineProperty(res.props, MARK, { value: true, enumerable: false });
+    const oldPress = res.props.onPress;
+    if (typeof oldPress !== "function") return res;
+    res.props.onPress = (...pressArgs: any[]) => {
+      if (!copyFrom(args, res)) oldPress(...pressArgs);
+    };
+    return res;
+  });
+  unpatches.push(un);
+  return true;
 }
 
 function scan() {
-  try {
-    const metro: any = (globalThis as any).vendetta?.metro;
-    if (!metro) return;
+  if (installed) return;
+  const mods = (metro as any).modules;
+  const candidates: any[] = [];
+  const seen = new Set<any>();
 
-    // findAll is used only to locate modules containing the actual RolePill implementation.
-    const found = metro.findAll((m: any) => {
-      try {
-        if (!m || typeof m !== "object") return false;
-        for (const v of Object.values(m)) {
-          if (typeof v === "function" && /rolePillBackgroundColor|roleDotStyle|useRoleColorSettingValue/.test(functionSource(v))) return true;
-        }
-        return false;
-      } catch { return false; }
-    });
-
-    for (const m of found || []) {
-      patchRolePillModule(m);
-      patchRolePillModule(m?.exports);
-      patchRolePillModule(m?.publicModule?.exports);
+  const walk = (v: any, depth = 0) => {
+    if (v == null || depth > 3 || seen.has(v)) return;
+    if (typeof v !== "object" && typeof v !== "function") return;
+    seen.add(v);
+    if (typeof v === "function") {
+      let src = ""; try { src = Function.prototype.toString.call(v); } catch (_) {}
+      if (/rolePillBackgroundColor|roleDotStyle|useRoleColorSettingValue|RolePill/i.test(src)) candidates.push(v);
+      return;
     }
-  } catch {
-    // Completely fail closed.
+    for (const k of Object.keys(v)) {
+      if (/default|render|type|exports|role/i.test(k)) walk(v[k], depth + 1);
+    }
+  };
+
+  try {
+    const list = typeof mods === "object" ? Object.values(mods) : [];
+    for (const m of list) walk(m);
+  } catch (_) {}
+
+  for (const fn of candidates) {
+    try {
+      const parent = { target: fn };
+      if (patchCandidate(parent, "target")) installed = true;
+    } catch (_) {}
   }
+
+  // Also scan the public Metro finder result set. This is narrower and safe.
+  try {
+    const all = metro.findAll((m: any) => {
+      try {
+        return Object.values(m || {}).some((v: any) => typeof v === "function" && /rolePillBackgroundColor|roleDotStyle|useRoleColorSettingValue|RolePill/i.test(Function.prototype.toString.call(v)));
+      } catch (_) { return false; }
+    });
+    for (const m of all || []) {
+      if (patchCandidate(m, "default")) installed = true;
+      if (patchCandidate(m, "render")) installed = true;
+    }
+  } catch (_) {}
 }
 
 export default {
   onLoad: () => {
+    // Discord loads many profile modules lazily, so scan more than once.
     scan();
-    // Discord can lazy-load the profile module, so rescan without touching React globally.
-    const timer = setInterval(scan, 1500);
-    unpatches.push(() => clearInterval(timer));
+    const timers = [500, 1500, 3000, 6000, 10000].map(ms => setTimeout(scan, ms));
+    unpatches.push(() => timers.forEach(clearTimeout));
   },
   onUnload: () => {
-    while (unpatches.length) {
-      try { unpatches.pop()?.(); } catch {}
-    }
+    unpatches.splice(0).forEach(u => { try { u(); } catch (_) {} });
+    installed = false;
   },
 };
