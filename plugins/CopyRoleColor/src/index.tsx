@@ -5,19 +5,18 @@ import { clipboard } from "@vendetta/metro/common";
 import { showToast } from "@vendetta/ui/toasts";
 
 let unpatches = [];
-let loggedOuter = false;
-let loggedInner = false;
+let loggedSample = false;
 let loggedPress = false;
 
 function safeSummarize(obj, depth = 0) {
     if (obj === null || obj === undefined) return String(obj);
-    if (depth > 3) return "…";
+    if (depth > 4) return "…";
     if (typeof obj === "function") return `[Function: ${obj.name || "anonymous"}]`;
     if (typeof obj !== "object") return typeof obj === "string" ? `"${obj}"` : String(obj);
     if (Array.isArray(obj)) {
         return "[" + obj.slice(0, 8).map(v => safeSummarize(v, depth + 1)).join(", ") + (obj.length > 8 ? ", …" : "") + "]";
     }
-    const keys = Object.keys(obj).slice(0, 25);
+    const keys = Object.keys(obj).slice(0, 30);
     return "{" + keys.map(k => {
         let v;
         try { v = obj[k]; } catch (e) { v = "<getter threw>"; }
@@ -37,23 +36,27 @@ function walkElements(node, visit, depth = 0) {
     if (children) walkElements(children, visit, depth + 1);
 }
 
-// Attach onLongPress + color-copy logic to a single chip-like element.
-function instrumentChipElement(el) {
-    if (!el?.props) return;
-    if (el.props.__copyRoleColorInstrumented) return;
+function typeName(t) {
+    if (typeof t === "function") return t.name || "anon fn";
+    if (t && typeof t === "object" && t.displayName) return t.displayName;
+    return String(t);
+}
+
+function instrumentRoleItemElement(el) {
+    if (!el?.props || el.props.__copyRoleColorInstrumented) return;
     el.props.__copyRoleColorInstrumented = true;
 
     const previous = el.props.onLongPress;
     el.props.onLongPress = (...pressArgs) => {
         if (!loggedPress) {
             loggedPress = true;
-            console.log("[CopyRoleColor debug v5] LONG PRESS - chip element props:", safeSummarize(el.props));
+            console.log("[CopyRoleColor debug v6] LONG PRESS - RoleItem element props:", safeSummarize(el.props));
         }
 
-        const role = el.props.role ?? el.props.item ?? el.props.data;
+        const role = el.props.role ?? el.props.item ?? el.props.data ?? el.props.guildRole;
         let color = el.props.color ?? el.props.roleColor ?? role?.color;
 
-        showToast(`chip props: ${Object.keys(el.props).join(",")} color=${color ?? "none"}`, getAssetIDByName("ic_warning"));
+        showToast(`RoleItem props: ${Object.keys(el.props).join(",")} | color=${color ?? "none"}`, getAssetIDByName("ic_warning"));
 
         if (color != null) {
             const hex = typeof color === "number"
@@ -77,45 +80,27 @@ export default {
 
         unpatches.push(patcher.after("default", mod, (args, res) => {
             walkElements(res, (el) => {
-                if (typeof el.type !== "function") return;
-                if (el.type.name !== "RolesList") return;
-                if (el.type.__copyRoleColorWrapped) return; // already wrapped this render's element
+                if (typeName(el.type) !== "RolesList") return;
+                if (el.type.__copyRoleColorWrapped) return;
 
                 const OriginalRolesList = el.type;
 
                 function PatchedRolesList(props) {
                     const innerResult = OriginalRolesList(props);
 
-                    if (!loggedOuter) {
-                        loggedOuter = true;
-                        console.log("[CopyRoleColor debug v5] RolesList props:", safeSummarize(props));
-                        console.log("[CopyRoleColor debug v5] RolesList return value:", safeSummarize(innerResult));
-                    }
-
-                    const chipMatches = [];
+                    const roleItems = [];
                     walkElements(innerResult, (child) => {
-                        // Anything with a press handler is a strong candidate
-                        // for "the actual pressable chip".
-                        if (child.props?.onPress || child.props?.onLongPress) {
-                            chipMatches.push(child);
-                        }
+                        if (typeName(child.type) === "RoleItem") roleItems.push(child);
                     });
 
-                    if (!loggedInner) {
-                        loggedInner = true;
-                        console.log("[CopyRoleColor debug v5] pressable chip candidates found:", chipMatches.length);
-                        if (chipMatches.length > 0) {
-                            console.log("[CopyRoleColor debug v5] sample chip element:", safeSummarize(chipMatches[0]));
-                        } else {
-                            const allTypes = [];
-                            walkElements(innerResult, (child) => {
-                                allTypes.push(typeof child.type === "function" ? (child.type.name || "anon fn") : child.type);
-                            });
-                            console.log("[CopyRoleColor debug v5] no pressable matches. types found:", safeSummarize(allTypes));
-                        }
+                    if (!loggedSample && roleItems.length > 0) {
+                        loggedSample = true;
+                        console.log("[CopyRoleColor debug v6] RoleItem count:", roleItems.length);
+                        console.log("[CopyRoleColor debug v6] sample RoleItem element:", safeSummarize(roleItems[0]));
+                        console.log("[CopyRoleColor debug v6] sample RoleItem props keys:", Object.keys(roleItems[0].props || {}));
                     }
 
-                    for (const chip of chipMatches) instrumentChipElement(chip);
+                    for (const item of roleItems) instrumentRoleItemElement(item);
 
                     return innerResult;
                 }
@@ -128,8 +113,7 @@ export default {
     onUnload: () => {
         unpatches.forEach(u => u());
         unpatches = [];
-        loggedOuter = false;
-        loggedInner = false;
+        loggedSample = false;
         loggedPress = false;
     },
 }
