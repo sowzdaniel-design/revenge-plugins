@@ -5,8 +5,9 @@ import { clipboard } from "@vendetta/metro/common";
 import { showToast } from "@vendetta/ui/toasts";
 
 let unpatches = [];
-let loggedShape = false;
-let loggedFirstItem = false;
+let loggedOuter = false;
+let loggedInner = false;
+let loggedPress = false;
 
 function safeSummarize(obj, depth = 0) {
     if (obj === null || obj === undefined) return String(obj);
@@ -24,9 +25,6 @@ function safeSummarize(obj, depth = 0) {
     }).join(", ") + "}";
 }
 
-// Walk a React element tree (works for element objects and arrays of them)
-// and call `visit` on every element node found, recursing into
-// props.children at every level.
 function walkElements(node, visit, depth = 0) {
     if (!node || depth > 12) return;
     if (Array.isArray(node)) {
@@ -34,80 +32,104 @@ function walkElements(node, visit, depth = 0) {
         return;
     }
     if (typeof node !== "object") return;
-    if (node.$$typeof) {
-        visit(node);
-    }
+    if (node.$$typeof) visit(node);
     const children = node.props?.children;
     if (children) walkElements(children, visit, depth + 1);
+}
+
+// Attach onLongPress + color-copy logic to a single chip-like element.
+function instrumentChipElement(el) {
+    if (!el?.props) return;
+    if (el.props.__copyRoleColorInstrumented) return;
+    el.props.__copyRoleColorInstrumented = true;
+
+    const previous = el.props.onLongPress;
+    el.props.onLongPress = (...pressArgs) => {
+        if (!loggedPress) {
+            loggedPress = true;
+            console.log("[CopyRoleColor debug v5] LONG PRESS - chip element props:", safeSummarize(el.props));
+        }
+
+        const role = el.props.role ?? el.props.item ?? el.props.data;
+        let color = el.props.color ?? el.props.roleColor ?? role?.color;
+
+        showToast(`chip props: ${Object.keys(el.props).join(",")} color=${color ?? "none"}`, getAssetIDByName("ic_warning"));
+
+        if (color != null) {
+            const hex = typeof color === "number"
+                ? "#" + color.toString(16).padStart(6, "0")
+                : color;
+            clipboard.setString(hex);
+            showToast("Copied role color: " + hex, getAssetIDByName("ic_message_copy"));
+        }
+
+        if (typeof previous === "function") previous(...pressArgs);
+    };
 }
 
 export default {
     onLoad: () => {
         const mod = findByName("UserProfileRolesCard", false);
-        if (!mod?.RoleItem || !mod?.default) {
-            showToast("CopyRoleColor(debug): module/exports missing", getAssetIDByName("ic_warning"));
-            console.log("[CopyRoleColor debug v4] module shape:", mod ? Object.keys(mod) : "not found");
+        if (!mod?.default) {
+            showToast("CopyRoleColor(debug): module missing", getAssetIDByName("ic_warning"));
             return;
         }
 
-        const RoleItemRef = mod.RoleItem;
-        console.log("[CopyRoleColor debug v4] watching for elements with type === RoleItem reference");
-
         unpatches.push(patcher.after("default", mod, (args, res) => {
-            const matches = [];
             walkElements(res, (el) => {
-                if (el.type === RoleItemRef) matches.push(el);
-            });
+                if (typeof el.type !== "function") return;
+                if (el.type.name !== "RolesList") return;
+                if (el.type.__copyRoleColorWrapped) return; // already wrapped this render's element
 
-            if (!loggedShape) {
-                loggedShape = true;
-                console.log("[CopyRoleColor debug v4] matched RoleItem elements count:", matches.length);
-                if (matches.length > 0) {
-                    console.log("[CopyRoleColor debug v4] sample RoleItem element:", safeSummarize(matches[0]));
-                    console.log("[CopyRoleColor debug v4] sample RoleItem element props keys:", Object.keys(matches[0].props || {}));
-                } else {
-                    // Fall back: dump everything we found in the tree so we
-                    // can see what types ARE present, in case RoleItem isn't
-                    // used here at all despite being exported.
-                    const allTypes = [];
-                    walkElements(res, (el) => {
-                        allTypes.push(typeof el.type === "function" ? (el.type.name || "anon fn") : el.type);
+                const OriginalRolesList = el.type;
+
+                function PatchedRolesList(props) {
+                    const innerResult = OriginalRolesList(props);
+
+                    if (!loggedOuter) {
+                        loggedOuter = true;
+                        console.log("[CopyRoleColor debug v5] RolesList props:", safeSummarize(props));
+                        console.log("[CopyRoleColor debug v5] RolesList return value:", safeSummarize(innerResult));
+                    }
+
+                    const chipMatches = [];
+                    walkElements(innerResult, (child) => {
+                        // Anything with a press handler is a strong candidate
+                        // for "the actual pressable chip".
+                        if (child.props?.onPress || child.props?.onLongPress) {
+                            chipMatches.push(child);
+                        }
                     });
-                    console.log("[CopyRoleColor debug v4] no RoleItem matches. All element types in tree:", safeSummarize(allTypes));
+
+                    if (!loggedInner) {
+                        loggedInner = true;
+                        console.log("[CopyRoleColor debug v5] pressable chip candidates found:", chipMatches.length);
+                        if (chipMatches.length > 0) {
+                            console.log("[CopyRoleColor debug v5] sample chip element:", safeSummarize(chipMatches[0]));
+                        } else {
+                            const allTypes = [];
+                            walkElements(innerResult, (child) => {
+                                allTypes.push(typeof child.type === "function" ? (child.type.name || "anon fn") : child.type);
+                            });
+                            console.log("[CopyRoleColor debug v5] no pressable matches. types found:", safeSummarize(allTypes));
+                        }
+                    }
+
+                    for (const chip of chipMatches) instrumentChipElement(chip);
+
+                    return innerResult;
                 }
-            }
+                PatchedRolesList.__copyRoleColorWrapped = true;
 
-            for (const el of matches) {
-                if (!el.props) continue;
-                const previous = el.props.onLongPress;
-                el.props.onLongPress = (...pressArgs) => {
-                    if (!loggedFirstItem) {
-                        loggedFirstItem = true;
-                        console.log("[CopyRoleColor debug v4] LONG PRESS - element props:", safeSummarize(el.props));
-                    }
-
-                    const role = el.props.role ?? el.props.item ?? el.props.data;
-                    let color = el.props.color ?? el.props.roleColor ?? role?.color;
-
-                    showToast(`RoleItem props: ${Object.keys(el.props).join(",")} color=${color ?? "none"}`, getAssetIDByName("ic_warning"));
-
-                    if (color != null) {
-                        const hex = typeof color === "number"
-                            ? "#" + color.toString(16).padStart(6, "0")
-                            : color;
-                        clipboard.setString(hex);
-                        showToast("Copied role color: " + hex, getAssetIDByName("ic_message_copy"));
-                    }
-
-                    if (typeof previous === "function") previous(...pressArgs);
-                };
-            }
+                el.type = PatchedRolesList;
+            });
         }));
     },
     onUnload: () => {
         unpatches.forEach(u => u());
         unpatches = [];
-        loggedShape = false;
-        loggedFirstItem = false;
+        loggedOuter = false;
+        loggedInner = false;
+        loggedPress = false;
     },
 }
