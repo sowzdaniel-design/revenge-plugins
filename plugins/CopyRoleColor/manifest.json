@@ -1,7 +1,0 @@
-{
-  "name": "CopyRoleColor",
-  "description": "Copy Discord role colors by tapping role pills on Discord 333.12",
-  "authors": [{"name":"MSMA","id":"307215253811363843"}],
-  "main": "src/index.tsx",
-  "vendetta": {"icon":"ic_custom_color"}
-}
